@@ -163,33 +163,204 @@ Edit `buildOnboardArgs()` (src/server.js:442-496) to add new CLI flags or auth p
 2. Add config-writing logic in `/setup/api/run` handler (src/server.js)
 3. Update client JS to collect the fields (src/public/setup-app.js)
 
+## Live Instance
+
+- **URL**: `https://openclaw-production-4e3d.up.railway.app`
+- **Dashboard**: `/dashboard` (Basic auth)
+- **Control UI**: `/openclaw` (no auth needed, token auto-injected)
+- **Setup Wizard**: `/setup` (Basic auth)
+- **Current Provider**: OpenRouter (`openrouter/auto`)
+
+### Railway Project
+
+- **Project**: `mindful-communication` (ID: `c57527ed-e599-42da-8f49-7fb30c6c4166`)
+- **Service**: `OpenClaw` (ID: `dac5966e-646e-4644-b3e9-cd31352f696d`)
+- **Environment**: `production` (ID: `7932450e-bf32-4428-905e-de0c3dff381f`)
+- **Volume**: mounted at `/data`
+
+### Managed Projects (cloned in workspace)
+
+| Project | Repo | Workspace Path |
+|---------|------|----------------|
+| Atlas-IT | `JW-Flo/Project-AtlasIT` | `/data/workspace/Project-AtlasIT` |
+| AWhittleWandering | `JW-Flo/AWhittleWandering` | `/data/workspace/AWhittleWandering` |
+| Market Agents | `JW-Flo/market_agents` | `/data/workspace/market_agents` |
+| JW-Site | `JW-Flo/JW-Site` | `/data/workspace/JW-Site` |
+
+### DevOps Credentials (all set on Railway)
+
+`GH_PAT`, `OPENROUTER_API_TOKEN`, `ANTHROPIC_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`, `RAILWAY_ACCOUNT_TOKEN`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `GROK_API_KEY`
+
+### Installed CLI Tools
+
+`gh`, `git`, `node`, `npm`, `jq`, `wrangler`, `railway`
+
+## Orchestrator Management (from Claude Code sessions)
+
+All management is done via the wrapper's API endpoints using `curl`. The live instance does NOT have a browser — use `curl` with Basic auth.
+
+### Auth Pattern
+
+```bash
+AUTH=$(echo -n ":${SETUP_PASSWORD}" | base64)
+curl -s -H "Authorization: Basic $AUTH" https://openclaw-production-4e3d.up.railway.app/ENDPOINT
+```
+
+### Check Instance Health
+
+```bash
+# Quick health
+curl -s https://openclaw-production-4e3d.up.railway.app/healthz
+# Detailed health
+curl -s https://openclaw-production-4e3d.up.railway.app/setup/healthz
+# Debug info + gateway logs
+curl -s -H "Authorization: Basic $AUTH" https://openclaw-production-4e3d.up.railway.app/setup/api/debug
+```
+
+### Switch AI Provider
+
+```bash
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  https://openclaw-production-4e3d.up.railway.app/setup/api/switch-provider \
+  -d '{"authChoice":"openrouter-api-key","authSecret":"YOUR_TOKEN","model":"openrouter/auto"}'
+```
+
+Valid `authChoice` values: `apiKey` (Anthropic), `openrouter-api-key`, `openai-api-key`, `gemini-api-key`, etc.
+
+### Model Management
+
+```bash
+# Get current model
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/models/current
+# Set model
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/models/set -d '{"model":"openrouter/auto"}'
+# List available models
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/models/list
+```
+
+**Note**: `openclaw models` (no args) shows current model. The CLI subcommand is `models` not `models get`.
+
+### Project Management
+
+```bash
+# Status of all cloned projects
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/projects/status
+# Sync (clone or pull) repos
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/projects/sync \
+  -d '{"repos":["JW-Flo/Project-AtlasIT","JW-Flo/AWhittleWandering","JW-Flo/market_agents","JW-Flo/JW-Site"]}'
+```
+
+### Run Shell Commands on Instance
+
+```bash
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/shell -d '{"command":"npm test","cwd":"market_agents"}'
+```
+
+Blocklist-based safety (blocks `rm -rf /`, `mkfs`, `dd`, `shutdown`, etc.). The `cwd` param is relative to workspace dir.
+
+### Run OpenClaw CLI Commands
+
+```bash
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/openclaw-cmd -d '{"args":["models"]}'
+# Also: config get, config set, doctor, pairing, channels, models, etc.
+# Blocked: onboard, gateway (use dedicated endpoints instead)
+```
+
+### Set Railway Environment Variables
+
+Use Railway's GraphQL API:
+
+```bash
+curl -s -X POST https://backboard.railway.com/graphql/v2 \
+  -H "Authorization: Bearer ${RAILWAY_ACCOUNT_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"mutation { variableUpsert(input: { projectId: \"c57527ed-e599-42da-8f49-7fb30c6c4166\", environmentId: \"7932450e-bf32-4428-905e-de0c3dff381f\", serviceId: \"dac5966e-646e-4644-b3e9-cd31352f696d\", name: \"VAR_NAME\", value: \"VAR_VALUE\" }) }"}'
+```
+
+Setting env vars triggers a redeploy (~60-90s).
+
+### Gateway Management
+
+```bash
+# Restart gateway
+curl -s -X POST -H "Authorization: Basic $AUTH" .../setup/api/restart-gateway
+# Run doctor --repair
+curl -s -X POST -H "Authorization: Basic $AUTH" .../setup/api/doctor
+# Full reset (deletes config, requires re-onboarding)
+curl -s -X POST -H "Authorization: Basic $AUTH" .../setup/api/reset
+```
+
+### Workspace File Management
+
+```bash
+# Write a file
+curl -s -X POST -H "Authorization: Basic $AUTH" \
+  ".../setup/api/workspace/write?path=MEMORY.md" \
+  -H "Content-Type: text/plain" -d "# Updated memory content"
+# Read a file
+curl -s -H "Authorization: Basic $AUTH" ".../setup/api/workspace/read?path=MEMORY.md"
+# List directory
+curl -s -H "Authorization: Basic $AUTH" ".../setup/api/workspace/ls?path=."
+```
+
+### Telegram Bot Setup
+
+1. Message `@BotFather` on Telegram, create a bot, get the token
+2. Add via setup wizard or directly:
+   ```bash
+   curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+     .../setup/api/openclaw-cmd \
+     -d '{"args":["config","set","--json","channels.telegram","{\"enabled\":true,\"dmPolicy\":\"pairing\",\"botToken\":\"BOT_TOKEN\",\"groupPolicy\":\"allowlist\",\"streamMode\":\"partial\"}"]}'
+   ```
+3. Restart gateway, then approve pairing:
+   ```bash
+   curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+     .../setup/api/pairing/approve -d '{"channel":"telegram","code":"THE_CODE"}'
+   ```
+
+### Deploy Workflow (code changes)
+
+1. Make changes on branch `claude/openclaw-orchestrator-work-*`
+2. `npm run lint` to verify syntax
+3. Commit, push, create PR via GitHub API:
+   ```bash
+   curl -s -X POST "https://api.github.com/repos/JW-Flo/openclaw-railway-template/pulls" \
+     -H "Authorization: token ${GH_PAT}" -H "Content-Type: application/json" \
+     -d '{"title":"PR title","body":"Description","head":"branch-name","base":"main"}'
+   ```
+4. Merge PR:
+   ```bash
+   curl -s -X PUT "https://api.github.com/repos/JW-Flo/openclaw-railway-template/pulls/NUMBER/merge" \
+     -H "Authorization: token ${GH_PAT}" -d '{"merge_method":"squash"}'
+   ```
+5. Railway auto-deploys from main (~60-90s for Docker build)
+6. After squash-merge, rebase feature branch: `git fetch origin main && git rebase origin/main`
+
+### Full Status Check (copy-paste)
+
+```bash
+AUTH=$(echo -n ":${SETUP_PASSWORD}" | base64)
+BASE="https://openclaw-production-4e3d.up.railway.app"
+echo "=== Health ===" && curl -s $BASE/healthz
+echo -e "\n=== Gateway ===" && curl -s $BASE/setup/healthz | python3 -m json.tool
+echo -e "\n=== Model ===" && curl -s -H "Authorization: Basic $AUTH" $BASE/setup/api/models/current
+echo -e "\n=== Projects ===" && curl -s -H "Authorization: Basic $AUTH" $BASE/setup/api/projects/status | python3 -m json.tool
+echo -e "\n=== Credentials ===" && curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" $BASE/setup/api/shell -d '{"command":"for v in GH_PAT OPENROUTER_API_TOKEN ANTHROPIC_API_KEY CLOUDFLARE_ACCOUNT_ID RAILWAY_ACCOUNT_TOKEN TELEGRAM_API_ID TELEGRAM_API_HASH GROK_API_KEY; do val=$(printenv $v); if [ -n \"$val\" ]; then echo \"$v: SET\"; else echo \"$v: MISSING\"; fi; done"}'
+```
+
 ## Railway Deployment Notes
 
 - Template must mount a volume at `/data`
 - Must set `SETUP_PASSWORD` in Railway Variables
 - Public networking must be enabled (assigns `*.up.railway.app` domain)
 - OpenClaw is installed via `npm install -g openclaw@latest` during Docker build
-
-## Serena Semantic Coding
-
-This project has been onboarded with **Serena** (semantic coding assistant via MCP). Comprehensive memory files are available covering:
-
-- Project overview and architecture
-- Tech stack and codebase structure
-- Code style and conventions
-- Development commands and task completion checklist
-- Quirks and gotchas
-
-**When working on tasks:**
-1. Check `mcp__serena__check_onboarding_performed` first to see available memories
-2. Read relevant memory files before diving into code (e.g., `mcp__serena__read_memory`)
-3. Use Serena's semantic tools for efficient code exploration:
-   - `get_symbols_overview` - Get high-level file structure without reading entire file
-   - `find_symbol` - Find classes, functions, methods by name path
-   - `find_referencing_symbols` - Understand dependencies and usage
-4. Prefer symbolic editing (`replace_symbol_body`, `insert_after_symbol`) for precise modifications
-
-This avoids repeatedly reading large files and provides instant context about the project.
+- DevOps tools installed: `gh`, `jq`, `wrangler`, `railway` CLI
+- Workspace templates auto-copied on first boot from `workspace-templates/`
+- Git credentials auto-configured from `GH_PAT` env var via `entrypoint.sh`
 
 ## Quirks & Gotchas
 
@@ -201,3 +372,7 @@ This avoids repeatedly reading large files and provides instant context about th
 6. **WebSocket auth requires proxy event handlers** → Direct `req.headers` modification doesn't work for WebSocket upgrades with http-proxy; must use `proxyReqWs` event (src/server.js:741) to reliably inject Authorization header
 7. **Control UI requires allowInsecureAuth to bypass pairing** → Set `gateway.controlUi.allowInsecureAuth=true` during onboarding to prevent "disconnected (1008): pairing required" errors (GitHub issue #2284). Wrapper already handles bearer token auth, so device pairing is unnecessary.
 8. **Control UI reads token from localStorage, not URL params** → The `?token=` URL parameter is NOT used by the Control UI JS for WebSocket auth. The wrapper serves a bootstrap page at `/openclaw` that writes the token to `localStorage["openclaw.control.settings.v1"]` before loading the actual UI (src/server.js:1158-1183).
+9. **OpenClaw CLI `models` subcommand** → Use `openclaw models` (no args) for current model info. `models get` does NOT exist. `models list` and `models set <model>` work as expected.
+10. **Claude Code cannot browse the UI** → No Puppeteer/browser. Use `curl` against API endpoints for all management. `WebFetch` can fetch static HTML but cannot execute JS (so SPAs like `/dashboard` and `/openclaw` won't render).
+11. **Railway env vars trigger redeploy** → Setting variables via the GraphQL API automatically triggers a new deployment (~60-90s). Set multiple vars quickly to batch into one deploy.
+12. **Squash merges require rebase** → After squash-merging a PR, the feature branch diverges from main. Always `git fetch origin main && git rebase origin/main` before the next PR.
