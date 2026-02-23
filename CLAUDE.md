@@ -69,12 +69,14 @@ open http://localhost:8080/setup  # password: test
 
 ### Key Files
 
-- **src/server.js** (main entry): Express wrapper, proxy setup, gateway lifecycle management, configuration persistence (server logic only - no inline HTML/CSS)
-- **src/public/** (static assets for setup wizard):
+- **src/server.js** (main entry): Express wrapper, proxy setup, gateway lifecycle management, configuration persistence, DevOps APIs (server logic only - no inline HTML/CSS)
+- **src/public/** (static assets):
   - **setup.html**: Setup wizard HTML structure
-  - **styles.css**: Setup wizard styling (extracted from inline styles)
-  - **setup-app.js**: Client-side JS for `/setup` wizard (vanilla JS, no build step)
-- **Dockerfile**: Single-stage build (installs OpenClaw via npm, installs wrapper deps)
+  - **dashboard.html**: DevOps dashboard with overview, projects, models, and tools tabs
+  - **loading.html**: Loading/splash page
+  - **tui.html**: Terminal UI page
+- **workspace-templates/**: Agent personality templates (IDENTITY, USER, MEMORY, TOOLS, AGENTS, SOUL) auto-copied to workspace on first boot
+- **Dockerfile**: Single-stage build (installs OpenClaw, gh, jq, wrangler, railway CLI)
 
 ### Environment Variables
 

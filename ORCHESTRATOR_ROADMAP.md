@@ -275,8 +275,15 @@ openclaw gateway run --bind loopback --port 18789 --auth token
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/setup` | GET | Basic | Setup wizard UI |
+| `/dashboard` | GET | Basic | DevOps dashboard (overview, projects, models, tools) |
 | `/setup/api/status` | GET | Basic | Config and auth status |
 | `/setup/api/run` | POST | Basic | Run onboarding |
+| `/setup/api/switch-provider` | POST | Basic | Change AI provider without full reset |
+| `/setup/api/models/current` | GET | Basic | Get current model |
+| `/setup/api/models/set` | POST | Basic | Set model |
+| `/setup/api/models/list` | GET | Basic | List available models |
+| `/setup/api/projects/status` | GET | Basic | Get all project statuses |
+| `/setup/api/projects/sync` | POST | Basic | Clone/pull repos |
 | `/setup/api/debug` | GET | Basic | Debug info + gateway logs |
 | `/setup/api/doctor` | POST | Basic | Run doctor --repair |
 | `/setup/api/reset` | POST | Basic | Delete config, start over |
@@ -284,33 +291,46 @@ openclaw gateway run --bind loopback --port 18789 --auth token
 | `/setup/api/gateway-help` | GET | Basic | Show gateway CLI help |
 | `/setup/api/config-get` | POST | Basic | Read gateway config |
 | `/setup/api/pairing/approve` | POST | Basic | Approve channel pairing |
+| `/setup/api/shell` | POST | Basic | Run shell commands (blocklist safety) |
 | `/openclaw` | GET | None | Control UI (token auto-injected) |
 | `/healthz` | GET | None | Health check |
 | `/setup/healthz` | GET | None | Detailed health check |
 
 ---
 
-## Immediate Next Steps
+## Immediate Next Steps (Post-Deploy)
 
-1. **Get gateway running** — Monitor Railway redeploy, check `/setup/api/debug` for `gatewayLogs`
-2. **Create Telegram bot** — Message @BotFather, get token, configure via setup wizard
-3. **Set up GitHub access** — Store PAT in agent workspace for repo operations
-4. **Write AGENTS.md** — Define the orchestrator's behavior, project awareness, and workflow rules
-5. **Clone projects** — Pull all repos into `/data/workspace/`
-6. **Test end-to-end** — Message agent via Telegram: "check atlas-it tests" → agent pulls, tests, reports
+1. **Merge PR to main** — Railway auto-deploys from main
+2. **Switch to OpenRouter** — `POST /setup/api/switch-provider` with `authChoice=openrouter-api-key`, `authSecret=<OPENROUTER_API_TOKEN>`, `model=openrouter/auto`
+3. **Clone all project repos** — `POST /setup/api/projects/sync` with repos array
+4. **Verify /dashboard** — Check all projects, tools, and credentials show green
+5. **Configure Telegram bot** — Create bot via @BotFather, add token via /setup wizard
+6. **Test end-to-end** — Send message via Control UI or Telegram asking Claw to check a project
+
+---
+
+## Completed
+
+- [x] Docker image includes gh, jq, wrangler, railway CLI
+- [x] Workspace templates auto-bootstrap on startup (IDENTITY, USER, MEMORY, TOOLS, AGENTS, SOUL)
+- [x] Shell API expanded from whitelist to blocklist
+- [x] `/setup/api/switch-provider` — change AI provider without reset
+- [x] Model management APIs (current, set, list)
+- [x] Project management APIs (status, sync/clone)
+- [x] `/dashboard` page with overview, projects, models, and tools tabs
+- [x] `.env.example` updated with DevOps vars
+- [x] GitHub credentials auto-configured via `GH_PAT` env var in entrypoint
 
 ---
 
 ## Open Questions
 
-- **Model selection**: Claude Sonnet 4 (fast, cheap) vs Claude Opus 4 (deep reasoning)? Consider Sonnet for routine tasks, Opus for complex refactoring.
-- **Cost management**: Monitor Anthropic API usage. Consider OpenRouter as a fallback for cost optimization.
-- **Security**: The agent will have GitHub push access to all repos. Define branch protection rules and PR-only merge policies to prevent accidental damage.
-- **Scaling**: Railway free tier may not have enough resources for concurrent sub-agents. Monitor memory/CPU usage.
+- **Cost management**: Monitor API usage. OpenRouter provides multi-model access for cost optimization.
+- **Security**: The agent has GitHub push access to all repos. Define branch protection rules and PR-only merge policies.
+- **Scaling**: Railway may not have enough resources for concurrent sub-agents. Monitor memory/CPU.
 - **Telegram bot token**: Need to create one via @BotFather and configure it.
 
 ---
 
 *Last updated: 2026-02-23*
 *OpenClaw version: 2026.2.15*
-*Session: https://claude.ai/code/session_01TXe1KLYUAanPaYurDKEuvu*
