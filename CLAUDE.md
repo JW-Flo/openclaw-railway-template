@@ -97,8 +97,11 @@ The wrapper manages a **two-layer auth scheme**:
 
 1. **Setup wizard auth**: Basic auth with `SETUP_PASSWORD` (src/server.js:190)
 2. **Gateway auth**: Bearer token (auto-generated or from `OPENCLAW_GATEWAY_TOKEN` env)
-   - Token is auto-injected into proxied requests (src/server.js:736, src/server.js:741)
+   - Token is auto-injected into proxied requests (src/server.js:1122, src/server.js:1126)
    - Persisted to `${STATE_DIR}/gateway.token` if not provided via env (src/server.js:25-48)
+3. **Control UI auth**: Token is injected into `localStorage["openclaw.control.settings.v1"]` via a bootstrap page (src/server.js:1158-1183)
+   - The Control UI reads its auth token from localStorage, NOT from URL params
+   - A bootstrap page at `/openclaw` writes the token to localStorage and then redirects to `/openclaw?_boot=1` which is proxied to the gateway
 
 ### Onboarding Process
 
@@ -195,3 +198,4 @@ This avoids repeatedly reading large files and provides instant context about th
 5. **Gateway spawn inherits stdio** → logs appear in wrapper output (src/server.js:134)
 6. **WebSocket auth requires proxy event handlers** → Direct `req.headers` modification doesn't work for WebSocket upgrades with http-proxy; must use `proxyReqWs` event (src/server.js:741) to reliably inject Authorization header
 7. **Control UI requires allowInsecureAuth to bypass pairing** → Set `gateway.controlUi.allowInsecureAuth=true` during onboarding to prevent "disconnected (1008): pairing required" errors (GitHub issue #2284). Wrapper already handles bearer token auth, so device pairing is unnecessary.
+8. **Control UI reads token from localStorage, not URL params** → The `?token=` URL parameter is NOT used by the Control UI JS for WebSocket auth. The wrapper serves a bootstrap page at `/openclaw` that writes the token to `localStorage["openclaw.control.settings.v1"]` before loading the actual UI (src/server.js:1158-1183).
