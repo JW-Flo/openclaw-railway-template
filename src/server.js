@@ -1034,8 +1034,11 @@ app.post("/setup/api/switch-provider", requireSetupAuth, async (req, res) => {
 // Model management APIs
 // ---------------------------------------------------------------------------
 app.get("/setup/api/models/current", requireSetupAuth, async (_req, res) => {
-  const r = await runCmd(OPENCLAW_NODE, clawArgs(["models", "get"]));
-  return res.json({ ok: r.code === 0, model: r.output.trim(), raw: r.output });
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["models"]));
+  // Parse the "Default" line from the output
+  const defaultMatch = r.output.match(/Default\s*:\s*(.+)/);
+  const model = defaultMatch ? defaultMatch[1].trim() : r.output.trim();
+  return res.json({ ok: r.code === 0, model, raw: r.output });
 });
 
 app.post("/setup/api/models/set", requireSetupAuth, async (req, res) => {
