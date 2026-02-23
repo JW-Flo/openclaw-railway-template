@@ -436,6 +436,12 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
       options: [{ value: "openrouter-api-key", label: "OpenRouter API key" }],
     },
     {
+      value: "xai",
+      label: "xAI (Grok)",
+      hint: "API key",
+      options: [{ value: "xai-api-key", label: "xAI API key" }],
+    },
+    {
       value: "ai-gateway",
       label: "Vercel AI Gateway",
       hint: "API key",
@@ -550,6 +556,7 @@ function buildOnboardArgs(payload) {
       "minimax-api-lightning": "--minimax-api-key",
       "synthetic-api-key": "--synthetic-api-key",
       "opencode-zen": "--opencode-zen-api-key",
+      "xai-api-key": "--xai-api-key",
     };
     const flag = map[payload.authChoice];
     if (flag && secret) {
@@ -611,6 +618,7 @@ const VALID_AUTH_CHOICES = [
   "copilot-proxy",
   "synthetic-api-key",
   "opencode-zen",
+  "xai-api-key",
 ];
 
 function validatePayload(payload) {
@@ -967,6 +975,7 @@ app.post("/setup/api/switch-provider", requireSetupAuth, async (req, res) => {
       "minimax-api-lightning": "--minimax-api-key",
       "synthetic-api-key": "--synthetic-api-key",
       "opencode-zen": "--opencode-zen-api-key",
+      "xai-api-key": "--xai-api-key",
     };
 
     const secret = (authSecret || "").trim();
