@@ -169,7 +169,11 @@ Edit `buildOnboardArgs()` (src/server.js:442-496) to add new CLI flags or auth p
 - **Dashboard**: `/dashboard` (Basic auth)
 - **Control UI**: `/openclaw` (no auth needed, token auto-injected)
 - **Setup Wizard**: `/setup` (Basic auth)
-- **Current Provider**: OpenRouter (`openrouter/auto`)
+- **Current Provider**: Anthropic direct (`anthropic/claude-sonnet-4-5`)
+- **Fallbacks**: `anthropic/claude-sonnet-4-0`, `openrouter/anthropic/claude-sonnet-4`
+- **Agent timeout**: 180 seconds
+- **Cron jobs**: `daily-health-check` (9 AM ET), `hourly-heartbeat` (every 1h)
+- **Agent personality**: Addresses user as "Joe" or "Overlord" (see workspace SOUL.md)
 
 ### Railway Project
 
@@ -322,6 +326,33 @@ curl -s -H "Authorization: Basic $AUTH" ".../setup/api/workspace/ls?path=."
      .../setup/api/pairing/approve -d '{"channel":"telegram","code":"THE_CODE"}'
    ```
 
+### Cron Job Management
+
+```bash
+# List all cron jobs
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/openclaw-cmd -d '{"args":["cron","list","--json"]}'
+# Run a cron job now (debug)
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/openclaw-cmd -d '{"args":["cron","run","JOB_ID"]}'
+# Add a new cron job
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/openclaw-cmd \
+  -d '{"args":["cron","add","--name","my-job","--cron","0 9 * * *","--tz","America/New_York","--system-event","Description of what to do","--timeout-seconds","300","--session","main","--json"]}'
+# Check cron scheduler status
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/openclaw-cmd -d '{"args":["cron","status"]}'
+```
+
+### Agent Testing
+
+```bash
+# Run agent via shell API (gateway-routed)
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/shell \
+  -d '{"command":"openclaw agent --session-id test1 --message \"Your message here\" --timeout 180 2>&1 | tail -300"}'
+```
+
 ### Deploy Workflow (code changes)
 
 1. Make changes on branch `claude/openclaw-orchestrator-work-*`
@@ -376,3 +407,7 @@ echo -e "\n=== Credentials ===" && curl -s -X POST -H "Authorization: Basic $AUT
 10. **Claude Code cannot browse the UI** → No Puppeteer/browser. Use `curl` against API endpoints for all management. `WebFetch` can fetch static HTML but cannot execute JS (so SPAs like `/dashboard` and `/openclaw` won't render).
 11. **Railway env vars trigger redeploy** → Setting variables via the GraphQL API automatically triggers a new deployment (~60-90s). Set multiple vars quickly to batch into one deploy.
 12. **Squash merges require rebase** → After squash-merging a PR, the feature branch diverges from main. Always `git fetch origin main && git rebase origin/main` before the next PR.
+13. **Shell API blocklist uses word-boundary regex** → Simple `includes()` matching caused false positives (e.g., "dd" blocked "add"). Fixed to use `\b` word-boundary regex patterns.
+14. **Claude Max cannot be used with OpenClaw** → Anthropic blocked third-party OAuth access (Jan 2026). Only standard API keys from `console.anthropic.com` work. Max subscriptions are for claude.ai and Claude Code only.
+15. **OpenClaw cron jobs use `--system-event` for main session** → `--message` only works with `--session isolated`. Main session jobs require `--system-event`. Manage via `openclaw cron list/add/rm/run`.
+16. **Both API providers need credits** → Check OpenRouter balance at `openrouter.ai/settings/credits` and Anthropic balance at `console.anthropic.com`. OpenClaw auto-disables profiles with billing errors (with backoff); reset via editing `auth-profiles.json`.
