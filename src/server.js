@@ -165,6 +165,19 @@ async function startGateway() {
     } catch {}
   }
 
+  // Ensure gateway.mode is set (required since OpenClaw 2026.2.x)
+  try {
+    const cfgRaw = fs.readFileSync(configPath(), "utf8");
+    const cfg = JSON.parse(cfgRaw);
+    if (!cfg.gateway?.mode) {
+      console.log("[gateway] gateway.mode unset, setting to 'local'...");
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.mode", "local"]));
+      console.log(`[gateway] config set gateway.mode=local exit=${r.code}`);
+    }
+  } catch (err) {
+    console.warn(`[gateway] Could not check/fix gateway.mode: ${err.message}`);
+  }
+
   const args = [
     "gateway",
     "run",
@@ -648,6 +661,12 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         ]),
       );
       extra += `[config] gateway.controlUi.allowInsecureAuth=true exit=${allowInsecureResult.code}\n`;
+
+      const modeResult = await runCmd(
+        OPENCLAW_NODE,
+        clawArgs(["config", "set", "gateway.mode", "local"]),
+      );
+      extra += `[config] gateway.mode=local exit=${modeResult.code}\n`;
 
       const tokenResult = await runCmd(
         OPENCLAW_NODE,
