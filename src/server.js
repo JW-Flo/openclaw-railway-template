@@ -113,20 +113,28 @@ function sleep(ms) {
 
 async function waitForGatewayReady(opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 60_000;
+  const perRequestMs = opts.perRequestMs ?? 5_000;
   const start = Date.now();
-  const endpoints = ["/openclaw", "/openclaw", "/", "/health"];
+  const endpoints = ["/openclaw", "/", "/health"];
 
   while (Date.now() - start < timeoutMs) {
     for (const endpoint of endpoints) {
       try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), perRequestMs);
         const res = await fetch(`${GATEWAY_TARGET}${endpoint}`, {
           method: "GET",
+          signal: controller.signal,
         });
-        if (res) {
-          console.log(`[gateway] ready at ${endpoint}`);
+        clearTimeout(timer);
+        if (res.ok || res.status < 500) {
+          try { await res.text(); } catch {}
+          console.log(`[gateway] ready at ${endpoint} (status=${res.status})`);
           return true;
         }
+        try { await res.text(); } catch {}
       } catch (err) {
+        if (err.name === "AbortError") continue;
         if (err.code !== "ECONNREFUSED" && err.cause?.code !== "ECONNREFUSED") {
           const msg = err.code || err.message;
           if (msg !== "fetch failed" && msg !== "UND_ERR_CONNECT_TIMEOUT") {
@@ -135,7 +143,7 @@ async function waitForGatewayReady(opts = {}) {
         }
       }
     }
-    await sleep(250);
+    await sleep(500);
   }
   console.error(`[gateway] failed to become ready after ${timeoutMs / 1000} seconds`);
   return false;
@@ -199,16 +207,22 @@ async function startGateway() {
     console.error(`[gateway] exited code=${code} signal=${signal}`);
     gatewayProc = null;
     if (!shuttingDown && isConfigured()) {
-      console.log("[gateway] scheduling auto-restart in 2s...");
+      console.log("[gateway] scheduling auto-restart in 3s...");
       setTimeout(() => {
-        if (!shuttingDown && !gatewayProc && isConfigured()) {
+        if (!shuttingDown && !gatewayProc && !gatewayStarting && isConfigured()) {
           ensureGatewayRunning().catch((err) => {
             console.error(`[gateway] auto-restart failed: ${err.message}`);
           });
         }
-      }, 2000);
+      }, 3000);
     }
   });
+
+  // Wait briefly to detect immediate crashes (bad path, missing entry, etc.)
+  await sleep(500);
+  if (!gatewayProc) {
+    throw new Error("Gateway process exited immediately after spawn");
+  }
 }
 
 async function ensureGatewayRunning() {
@@ -595,11 +609,13 @@ function validatePayload(payload) {
 app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
   try {
     if (isConfigured()) {
-      await ensureGatewayRunning();
+      ensureGatewayRunning().catch((err) => {
+        console.error(`[setup] Background gateway start failed: ${err.message}`);
+      });
       return res.json({
         ok: true,
         output:
-          "Already configured.\nUse Reset setup if you want to rerun onboarding.\n",
+          "Already configured. Gateway is starting in the background.\nUse Reset setup if you want to rerun onboarding.\n",
       });
     }
 
@@ -713,9 +729,10 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         });
       }
 
-      extra += "\n[setup] Starting gateway...\n";
-      await restartGateway();
-      extra += "[setup] Gateway started.\n";
+      extra += "\n[setup] Starting gateway in background...\n";
+      restartGateway()
+        .then(() => console.log("[setup] Gateway started successfully."))
+        .catch((err) => console.error(`[setup] Gateway background start failed: ${err.message}`));
     }
 
     return res.status(ok ? 200 : 500).json({
@@ -1007,8 +1024,8 @@ const server = app.listen(PORT, () => {
   if (isConfigured()) {
     (async () => {
       try {
-        console.log("[wrapper] running openclaw doctor --fix...");
-        const dr = await runCmd(OPENCLAW_NODE, clawArgs(["doctor", "--fix"]));
+        console.log("[wrapper] running openclaw doctor --non-interactive --repair...");
+        const dr = await runCmd(OPENCLAW_NODE, clawArgs(["doctor", "--non-interactive", "--repair"]));
         console.log(`[wrapper] doctor --fix exit=${dr.code}`);
         if (dr.output) console.log(dr.output);
       } catch (err) {
