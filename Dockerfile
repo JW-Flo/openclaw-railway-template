@@ -9,9 +9,18 @@ RUN apt-get update \
     procps \
     python3 \
     build-essential \
+    jq \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g openclaw@latest
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+  && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    > /etc/apt/sources.list.d/github-cli.list \
+  && apt-get update && apt-get install -y gh && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g openclaw@latest wrangler@latest @railway/cli@latest
 
 WORKDIR /app
 
@@ -19,6 +28,7 @@ COPY package.json pnpm-lock.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile --prod
 
 COPY src ./src
+COPY workspace-templates ./workspace-templates
 COPY entrypoint.sh ./entrypoint.sh
 
 RUN useradd -m -s /bin/bash openclaw \

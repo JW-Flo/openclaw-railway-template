@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenClaw Dashboard</title>
+<style>
+:root {
+  --bg: #0f0f1a;
+  --surface: #1a1a2e;
+  --surface2: #222240;
+  --border: #333355;
+  --text: #e0e0f0;
+  --text2: #9999bb;
+  --accent: #7c3aed;
+  --accent2: #a855f7;
+  --green: #22c55e;
+  --red: #ef4444;
+  --yellow: #eab308;
+  --blue: #3b82f6;
+  --mono: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  --sans: system-ui, -apple-system, sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.header h1 {
+  font-size: 20px;
+  font-weight: 600;
+}
+.header .nav-links {
+  display: flex;
+  gap: 16px;
+}
+.header .nav-links a {
+  color: var(--text2);
+  text-decoration: none;
+  font-size: 14px;
+}
+.header .nav-links a:hover { color: var(--accent2); }
+.tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0 24px;
+}
+.tab {
+  padding: 12px 20px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text2);
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+  user-select: none;
+}
+.tab:hover { color: var(--text); }
+.tab.active {
+  color: var(--accent2);
+  border-bottom-color: var(--accent);
+}
+.content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+}
+.panel { display: none; }
+.panel.active { display: block; }
+
+/* Cards */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+.card h3 {
+  font-size: 14px;
+  color: var(--text2);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.card .value {
+  font-size: 24px;
+  font-weight: 700;
+}
+.card .sub {
+  font-size: 12px;
+  color: var(--text2);
+  margin-top: 4px;
+}
+
+/* Status indicators */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.dot.green { background: var(--green); }
+.dot.red { background: var(--red); }
+.dot.yellow { background: var(--yellow); }
+
+/* Tables */
+.table-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+.table-wrap h3 {
+  padding: 12px 16px;
+  font-size: 14px;
+  border-bottom: 1px solid var(--border);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th, td {
+  text-align: left;
+  padding: 10px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+th {
+  color: var(--text2);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 11px;
+}
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--surface2); }
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent2); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn.primary:hover { background: var(--accent2); }
+.actions { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+
+/* Code/output */
+.output {
+  background: #111;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--green);
+  white-space: pre-wrap;
+  max-height: 300px;
+  overflow-y: auto;
+  margin-top: 12px;
+  display: none;
+}
+.output.visible { display: block; }
+
+/* Form elements */
+.form-group {
+  margin-bottom: 16px;
+}
+.form-group label {
+  display: block;
+  font-size: 13px;
+  color: var(--text2);
+  margin-bottom: 4px;
+}
+input[type="text"], select {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--mono);
+}
+input:focus, select:focus { outline: none; border-color: var(--accent); }
+
+/* Loading spinner */
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-row td { text-align: center; color: var(--text2); padding: 24px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>OpenClaw Dashboard</h1>
+  <div class="nav-links">
+    <a href="/setup">Setup</a>
+    <a href="/openclaw">Control UI</a>
+    <a href="/tui">TUI</a>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="overview">Overview</div>
+  <div class="tab" data-tab="projects">Projects</div>
+  <div class="tab" data-tab="models">Models</div>
+  <div class="tab" data-tab="tools">Tools</div>
+</div>
+
+<div class="content">
+  <!-- Overview Tab -->
+  <div class="panel active" id="panel-overview">
+    <div class="cards" id="overview-cards">
+      <div class="card">
+        <h3>Gateway</h3>
+        <div class="value" id="ov-gateway"><span class="spinner"></span></div>
+      </div>
+      <div class="card">
+        <h3>Configuration</h3>
+        <div class="value" id="ov-config"><span class="spinner"></span></div>
+      </div>
+      <div class="card">
+        <h3>Current Model</h3>
+        <div class="value" id="ov-model"><span class="spinner"></span></div>
+      </div>
+      <div class="card">
+        <h3>Projects</h3>
+        <div class="value" id="ov-projects"><span class="spinner"></span></div>
+      </div>
+      <div class="card">
+        <h3>OpenClaw Version</h3>
+        <div class="value" id="ov-version"><span class="spinner"></span></div>
+      </div>
+      <div class="card">
+        <h3>Credentials</h3>
+        <div class="value" id="ov-creds"><span class="spinner"></span></div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <h3>Recent Gateway Logs</h3>
+      <div id="ov-logs" style="padding:12px;font-family:var(--mono);font-size:12px;color:var(--text2);max-height:250px;overflow-y:auto;white-space:pre-wrap;">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Projects Tab -->
+  <div class="panel" id="panel-projects">
+    <div class="actions">
+      <button class="btn primary" id="btn-sync-projects">Sync All Projects</button>
+      <button class="btn" id="btn-refresh-projects">Refresh</button>
+    </div>
+    <div class="table-wrap">
+      <h3>Managed Projects</h3>
+      <table>
+        <thead><tr><th>Name</th><th>Branch</th><th>Last Commit</th><th>Status</th></tr></thead>
+        <tbody id="projects-tbody">
+          <tr class="loading-row"><td colspan="4"><span class="spinner"></span> Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="output" id="projects-output"></div>
+  </div>
+
+  <!-- Models Tab -->
+  <div class="panel" id="panel-models">
+    <div class="cards">
+      <div class="card" style="grid-column:span 2">
+        <h3>Current Model</h3>
+        <div class="value" id="models-current"><span class="spinner"></span></div>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Set Model</label>
+      <div style="display:flex;gap:8px;">
+        <input type="text" id="model-input" placeholder="e.g. openrouter/auto or anthropic/claude-sonnet-4-20250514">
+        <button class="btn primary" id="btn-set-model">Set</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <h3>Available Models</h3>
+      <div id="models-list" style="padding:12px;font-family:var(--mono);font-size:12px;color:var(--text2);max-height:400px;overflow-y:auto;white-space:pre-wrap;">Loading...</div>
+    </div>
+    <div class="output" id="models-output"></div>
+  </div>
+
+  <!-- Tools Tab -->
+  <div class="panel" id="panel-tools">
+    <div class="table-wrap">
+      <h3>CLI Tools</h3>
+      <table>
+        <thead><tr><th>Tool</th><th>Status</th><th>Version</th></tr></thead>
+        <tbody id="tools-tbody">
+          <tr class="loading-row"><td colspan="3"><span class="spinner"></span> Checking...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="table-wrap">
+      <h3>Environment Variables</h3>
+      <table>
+        <thead><tr><th>Variable</th><th>Status</th></tr></thead>
+        <tbody id="env-tbody">
+          <tr class="loading-row"><td colspan="2"><span class="spinner"></span> Checking...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  // Tab switching
+  const tabs = document.querySelectorAll(".tab");
+  const panels = document.querySelectorAll(".panel");
+  tabs.forEach(tab => {
+    tab.addEventListener("click", () => {
+      tabs.forEach(t => t.classList.remove("active"));
+      panels.forEach(p => p.classList.remove("active"));
+      tab.classList.add("active");
+      document.getElementById("panel-" + tab.dataset.tab).classList.add("active");
+    });
+  });
+
+  async function api(method, path, body) {
+    const opts = { method, headers: {} };
+    if (body) {
+      opts.headers["Content-Type"] = "application/json";
+      opts.body = JSON.stringify(body);
+    }
+    const r = await fetch(path, opts);
+    return r.json();
+  }
+
+  function dot(color) {
+    return '<span class="dot ' + color + '"></span>';
+  }
+
+  // --- Overview ---
+  async function loadOverview() {
+    const [health, status, model, projects, debug] = await Promise.all([
+      api("GET", "/setup/healthz"),
+      api("GET", "/setup/api/status"),
+      api("GET", "/setup/api/models/current").catch(() => ({ model: "unknown" })),
+      api("GET", "/setup/api/projects/status").catch(() => ({ projects: [] })),
+      api("GET", "/setup/api/debug"),
+    ]);
+
+    document.getElementById("ov-gateway").innerHTML =
+      health.gatewayRunning
+        ? dot("green") + ' <span style="font-size:16px">Running</span>'
+        : health.gatewayStarting
+          ? dot("yellow") + ' <span style="font-size:16px">Starting</span>'
+          : dot("red") + ' <span style="font-size:16px">Stopped</span>';
+
+    document.getElementById("ov-config").innerHTML =
+      health.configured
+        ? dot("green") + ' <span style="font-size:16px">Configured</span>'
+        : dot("red") + ' <span style="font-size:16px">Not configured</span>';
+
+    document.getElementById("ov-model").innerHTML =
+      '<span style="font-size:16px;font-family:var(--mono)">' + (model.model || "not set") + '</span>';
+
+    const projCount = (projects.projects || []).length;
+    document.getElementById("ov-projects").textContent = projCount;
+
+    document.getElementById("ov-version").innerHTML =
+      '<span style="font-size:16px;font-family:var(--mono)">' + (status.openclawVersion || "unknown") + '</span>';
+
+    // Check credentials
+    const envVars = ["GH_PAT", "OPENROUTER_API_TOKEN", "ANTHROPIC_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "RAILWAY_ACCOUNT_TOKEN"];
+    const envCheck = await api("POST", "/setup/api/shell", { command: "env" }).catch(() => ({ output: "" }));
+    const envOutput = envCheck.output || "";
+    let credsOk = 0;
+    for (const v of envVars) {
+      if (envOutput.includes(v + "=")) credsOk++;
+    }
+    document.getElementById("ov-creds").innerHTML =
+      '<span style="font-size:16px">' + credsOk + '/' + envVars.length + ' set</span>' +
+      (credsOk === envVars.length ? ' ' + dot("green") : ' ' + dot("yellow"));
+
+    // Gateway logs
+    const logs = (debug.gatewayLogs || []).slice(-30).join("\n");
+    document.getElementById("ov-logs").textContent = logs || "(no logs)";
+  }
+
+  // --- Projects ---
+  async function loadProjects() {
+    const data = await api("GET", "/setup/api/projects/status");
+    const tbody = document.getElementById("projects-tbody");
+    const projects = data.projects || [];
+    if (projects.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text2);padding:24px">No projects cloned yet. Click "Sync All Projects" to clone.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = projects.map(p =>
+      '<tr>' +
+        '<td style="font-weight:600">' + p.name + '</td>' +
+        '<td style="font-family:var(--mono);font-size:12px">' + p.branch + '</td>' +
+        '<td style="font-family:var(--mono);font-size:12px">' + p.lastCommit + '</td>' +
+        '<td>' + (p.dirty ? dot("yellow") + " " + p.dirtyFiles + " changed" : dot("green") + " Clean") + '</td>' +
+      '</tr>'
+    ).join("");
+  }
+
+  document.getElementById("btn-refresh-projects").addEventListener("click", loadProjects);
+
+  document.getElementById("btn-sync-projects").addEventListener("click", async () => {
+    const btn = document.getElementById("btn-sync-projects");
+    const out = document.getElementById("projects-output");
+    btn.disabled = true;
+    btn.textContent = "Syncing...";
+    out.classList.add("visible");
+    out.textContent = "Syncing projects...\n";
+    try {
+      const repos = [
+        "JW-Flo/Project-AtlasIT",
+        "JW-Flo/AWhittleWandering",
+        "JW-Flo/market_agents",
+        "JW-Flo/JW-Site",
+      ];
+      const data = await api("POST", "/setup/api/projects/sync", { repos });
+      out.textContent = JSON.stringify(data, null, 2);
+      await loadProjects();
+    } catch (err) {
+      out.textContent = "Error: " + err.message;
+    }
+    btn.disabled = false;
+    btn.textContent = "Sync All Projects";
+  });
+
+  // --- Models ---
+  async function loadModels() {
+    const [current, list] = await Promise.all([
+      api("GET", "/setup/api/models/current"),
+      api("GET", "/setup/api/models/list"),
+    ]);
+    document.getElementById("models-current").innerHTML =
+      '<span style="font-family:var(--mono)">' + (current.model || "not set") + '</span>';
+    document.getElementById("models-list").textContent = list.output || "(no models listed)";
+  }
+
+  document.getElementById("btn-set-model").addEventListener("click", async () => {
+    const input = document.getElementById("model-input");
+    const out = document.getElementById("models-output");
+    const model = input.value.trim();
+    if (!model) return;
+    out.classList.add("visible");
+    out.textContent = "Setting model to " + model + "...\n";
+    try {
+      const data = await api("POST", "/setup/api/models/set", { model });
+      out.textContent = data.output || JSON.stringify(data, null, 2);
+      await loadModels();
+    } catch (err) {
+      out.textContent = "Error: " + err.message;
+    }
+  });
+
+  // --- Tools ---
+  async function loadTools() {
+    const tools = [
+      { name: "gh", cmd: "gh --version" },
+      { name: "git", cmd: "git --version" },
+      { name: "node", cmd: "node --version" },
+      { name: "npm", cmd: "npm --version" },
+      { name: "jq", cmd: "jq --version" },
+      { name: "wrangler", cmd: "wrangler --version" },
+      { name: "railway", cmd: "railway version" },
+    ];
+
+    const tbody = document.getElementById("tools-tbody");
+    tbody.innerHTML = "";
+
+    for (const tool of tools) {
+      const r = await api("POST", "/setup/api/shell", { command: tool.cmd + " 2>&1 | head -1" }).catch(() => ({ ok: false, output: "not found" }));
+      const version = (r.output || "").trim().split("\n")[0] || "N/A";
+      tbody.innerHTML +=
+        '<tr><td style="font-weight:600">' + tool.name + '</td>' +
+        '<td>' + (r.ok ? dot("green") + " Installed" : dot("red") + " Missing") + '</td>' +
+        '<td style="font-family:var(--mono);font-size:12px">' + version + '</td></tr>';
+    }
+
+    // Environment variables
+    const envVars = [
+      "GH_PAT", "OPENROUTER_API_TOKEN", "ANTHROPIC_API_KEY",
+      "CLOUDFLARE_ACCOUNT_ID", "RAILWAY_ACCOUNT_TOKEN",
+      "TELEGRAM_API_ID", "TELEGRAM_API_HASH", "GROK_API_KEY",
+      "SETUP_PASSWORD", "OPENCLAW_GATEWAY_TOKEN",
+    ];
+
+    const envCheck = await api("POST", "/setup/api/shell", { command: "env" }).catch(() => ({ output: "" }));
+    const envOutput = envCheck.output || "";
+    const envTbody = document.getElementById("env-tbody");
+    envTbody.innerHTML = "";
+
+    for (const v of envVars) {
+      const isSet = envOutput.includes(v + "=");
+      envTbody.innerHTML +=
+        '<tr><td style="font-family:var(--mono);font-size:12px">' + v + '</td>' +
+        '<td>' + (isSet ? dot("green") + " Set" : dot("red") + " Not set") + '</td></tr>';
+    }
+  }
+
+  // Load all data
+  loadOverview();
+  loadProjects();
+  loadModels();
+  loadTools();
+})();
+</script>
+</body>
+</html>

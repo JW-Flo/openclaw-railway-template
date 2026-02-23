@@ -917,6 +917,214 @@ app.get("/setup/api/workspace/ls", requireSetupAuth, (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Switch AI provider without full reset
+// ---------------------------------------------------------------------------
+app.post("/setup/api/switch-provider", requireSetupAuth, async (req, res) => {
+  try {
+    if (!isConfigured()) {
+      return res.status(400).json({ ok: false, error: "Not configured yet. Run setup first." });
+    }
+    const { authChoice, authSecret, model } = req.body || {};
+    if (!authChoice) {
+      return res.status(400).json({ ok: false, error: "Missing authChoice" });
+    }
+    if (!VALID_AUTH_CHOICES.includes(authChoice)) {
+      return res.status(400).json({ ok: false, error: `Invalid authChoice: ${authChoice}` });
+    }
+
+    let output = "";
+
+    // Build onboard args just for the auth portion and re-run onboard
+    // with --force to overwrite existing config's auth section
+    const args = [
+      "onboard",
+      "--non-interactive",
+      "--accept-risk",
+      "--json",
+      "--no-install-daemon",
+      "--skip-health",
+      "--workspace", WORKSPACE_DIR,
+      "--gateway-bind", "loopback",
+      "--gateway-port", String(INTERNAL_GATEWAY_PORT),
+      "--gateway-auth", "token",
+      "--gateway-token", OPENCLAW_GATEWAY_TOKEN,
+      "--flow", "quickstart",
+      "--auth-choice", authChoice,
+    ];
+
+    // Map auth secrets to CLI flags
+    const secretMap = {
+      "openai-api-key": "--openai-api-key",
+      apiKey: "--anthropic-api-key",
+      "openrouter-api-key": "--openrouter-api-key",
+      "ai-gateway-api-key": "--ai-gateway-api-key",
+      "moonshot-api-key": "--moonshot-api-key",
+      "kimi-code-api-key": "--kimi-code-api-key",
+      "gemini-api-key": "--gemini-api-key",
+      "zai-api-key": "--zai-api-key",
+      "minimax-api": "--minimax-api-key",
+      "minimax-api-lightning": "--minimax-api-key",
+      "synthetic-api-key": "--synthetic-api-key",
+      "opencode-zen": "--opencode-zen-api-key",
+    };
+
+    const secret = (authSecret || "").trim();
+    const flag = secretMap[authChoice];
+    if (flag && secret) {
+      args.push(flag, secret);
+    }
+    if (authChoice === "token" && secret) {
+      args.push("--token-provider", "anthropic", "--token", secret);
+    }
+
+    // Delete existing config so onboard can re-create it
+    const cfgPath = configPath();
+    const backupPath = cfgPath + ".bak";
+    try {
+      fs.copyFileSync(cfgPath, backupPath);
+      fs.rmSync(cfgPath);
+    } catch {}
+
+    const onboard = await runCmd(OPENCLAW_NODE, clawArgs(args));
+    output += onboard.output;
+
+    if (onboard.code !== 0 || !isConfigured()) {
+      // Restore backup on failure
+      try { fs.copyFileSync(backupPath, cfgPath); } catch {}
+      return res.status(500).json({ ok: false, output: `Onboard failed (exit=${onboard.code}):\n${output}` });
+    }
+
+    // Re-apply gateway settings
+    const configs = [
+      ["gateway.controlUi.allowInsecureAuth", "true"],
+      ["gateway.mode", "local"],
+      ["gateway.auth.token", OPENCLAW_GATEWAY_TOKEN],
+    ];
+    for (const [key, val] of configs) {
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", key, val]));
+      output += `\n[config] ${key} exit=${r.code}`;
+    }
+    const proxiesResult = await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "gateway.trustedProxies", '["127.0.0.1"]']));
+    output += `\n[config] trustedProxies exit=${proxiesResult.code}`;
+
+    // Set model if provided
+    if (model?.trim()) {
+      const mr = await runCmd(OPENCLAW_NODE, clawArgs(["models", "set", model.trim()]));
+      output += `\n[models set] ${model.trim()} exit=${mr.code}\n${mr.output || ""}`;
+    }
+
+    // Clean up backup
+    try { fs.rmSync(backupPath, { force: true }); } catch {}
+
+    // Restart gateway with new provider
+    output += "\n[switch] Restarting gateway...";
+    restartGateway()
+      .then(() => console.log("[switch-provider] Gateway restarted successfully."))
+      .catch((err) => console.error(`[switch-provider] Gateway restart failed: ${err.message}`));
+
+    return res.json({ ok: true, output });
+  } catch (err) {
+    console.error("[/setup/api/switch-provider] error:", err);
+    return res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Model management APIs
+// ---------------------------------------------------------------------------
+app.get("/setup/api/models/current", requireSetupAuth, async (_req, res) => {
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["models", "get"]));
+  return res.json({ ok: r.code === 0, model: r.output.trim(), raw: r.output });
+});
+
+app.post("/setup/api/models/set", requireSetupAuth, async (req, res) => {
+  const { model } = req.body || {};
+  if (!model || typeof model !== "string") {
+    return res.status(400).json({ ok: false, error: "Missing model string" });
+  }
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["models", "set", model.trim()]));
+  return res.json({ ok: r.code === 0, output: r.output });
+});
+
+app.get("/setup/api/models/list", requireSetupAuth, async (_req, res) => {
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["models", "list"]));
+  return res.json({ ok: r.code === 0, output: r.output });
+});
+
+// ---------------------------------------------------------------------------
+// Project management APIs
+// ---------------------------------------------------------------------------
+app.get("/setup/api/projects/status", requireSetupAuth, async (_req, res) => {
+  try {
+    const entries = fs.readdirSync(WORKSPACE_DIR, { withFileTypes: true });
+    const projects = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const projPath = path.join(WORKSPACE_DIR, entry.name);
+      const gitDir = path.join(projPath, ".git");
+      if (!fs.existsSync(gitDir)) continue;
+
+      // Get git info
+      const branch = await runCmd("git", ["-C", projPath, "rev-parse", "--abbrev-ref", "HEAD"]);
+      const lastCommit = await runCmd("git", ["-C", projPath, "log", "-1", "--format=%h %s (%cr)"]);
+      const status = await runCmd("git", ["-C", projPath, "status", "--porcelain"]);
+
+      projects.push({
+        name: entry.name,
+        path: projPath,
+        branch: branch.output.trim(),
+        lastCommit: lastCommit.output.trim(),
+        dirty: (status.output.trim().length > 0),
+        dirtyFiles: status.output.trim().split("\n").filter(Boolean).length,
+      });
+    }
+    return res.json({ ok: true, projects });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/setup/api/projects/sync", requireSetupAuth, async (req, res) => {
+  const { repos } = req.body || {};
+  if (!Array.isArray(repos) || repos.length === 0) {
+    return res.status(400).json({ ok: false, error: "Missing repos array (e.g. [\"owner/repo\"])" });
+  }
+
+  const results = [];
+  for (const repo of repos) {
+    if (typeof repo !== "string" || !repo.includes("/")) {
+      results.push({ repo, ok: false, error: "Invalid repo format, use owner/repo" });
+      continue;
+    }
+    const repoName = repo.split("/").pop();
+    const projPath = path.join(WORKSPACE_DIR, repoName);
+
+    if (fs.existsSync(path.join(projPath, ".git"))) {
+      // Pull existing repo
+      const pull = await runCmd("git", ["-C", projPath, "pull", "--ff-only"]);
+      results.push({
+        repo,
+        action: "pull",
+        ok: pull.code === 0,
+        output: pull.output.trim(),
+      });
+    } else {
+      // Clone new repo
+      const cloneUrl = `https://github.com/${repo}.git`;
+      const clone = await runCmd("git", ["clone", cloneUrl, projPath]);
+      results.push({
+        repo,
+        action: "clone",
+        ok: clone.code === 0,
+        output: clone.output.trim(),
+      });
+    }
+  }
+
+  return res.json({ ok: results.every((r) => r.ok), results });
+});
+
 // Run openclaw CLI commands remotely (auth-protected)
 app.post("/setup/api/openclaw-cmd", requireSetupAuth, async (req, res) => {
   const { args } = req.body || {};
@@ -932,20 +1140,41 @@ app.post("/setup/api/openclaw-cmd", requireSetupAuth, async (req, res) => {
   return res.json({ ok: r.code === 0, code: r.code, output: r.output });
 });
 
-// Run shell commands in workspace (auth-protected, use carefully)
+// Run shell commands in workspace (auth-protected, blocklist for safety)
 app.post("/setup/api/shell", requireSetupAuth, async (req, res) => {
-  const { command } = req.body || {};
+  const { command, cwd } = req.body || {};
   if (!command || typeof command !== "string") {
     return res.status(400).json({ ok: false, error: "Missing command string" });
   }
-  // Safety: only allow specific safe commands
-  const allowed = ["ls", "cat", "git", "pwd", "whoami", "env", "mkdir", "echo", "head", "tail", "wc"];
-  const cmd = command.trim().split(/\s+/)[0];
-  if (!allowed.includes(cmd)) {
-    return res.status(403).json({ ok: false, error: `Command '${cmd}' not allowed. Allowed: ${allowed.join(", ")}` });
+  // Safety: block dangerous commands (blocklist approach for flexibility)
+  const blocked = [
+    "rm -rf /", "mkfs", "dd", "shutdown", "reboot", "poweroff", "halt",
+    "passwd", "useradd", "userdel", "groupadd", "groupdel",
+    "iptables", "ufw", "systemctl", "service",
+    "curl|sh", "wget|sh", "curl|bash", "wget|bash",
+  ];
+  const cmdLower = command.trim().toLowerCase();
+  for (const pattern of blocked) {
+    if (cmdLower.includes(pattern)) {
+      return res.status(403).json({ ok: false, error: `Command pattern '${pattern}' is blocked for safety` });
+    }
   }
-  const r = await runCmd("sh", ["-c", command], { cwd: WORKSPACE_DIR });
+
+  // Resolve working directory (must be within workspace)
+  let workDir = WORKSPACE_DIR;
+  if (cwd) {
+    const resolved = path.resolve(WORKSPACE_DIR, cwd);
+    if (resolved.startsWith(WORKSPACE_DIR)) {
+      workDir = resolved;
+    }
+  }
+
+  const r = await runCmd("sh", ["-c", command], { cwd: workDir });
   return res.json({ ok: r.code === 0, code: r.code, output: r.output });
+});
+
+app.get("/dashboard", requireSetupAuth, (_req, res) => {
+  res.sendFile(path.join(process.cwd(), "src", "public", "dashboard.html"));
 });
 
 app.get("/tui", requireSetupAuth, (_req, res) => {
