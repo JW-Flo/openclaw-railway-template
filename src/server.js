@@ -848,6 +848,16 @@ app.post("/setup/api/doctor", requireSetupAuth, async (_req, res) => {
   });
 });
 
+app.get("/setup/api/gateway-help", requireSetupAuth, async (_req, res) => {
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["gateway", "run", "--help"]));
+  res.json({ code: r.code, output: r.output });
+});
+
+app.post("/setup/api/config-get", requireSetupAuth, async (_req, res) => {
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get", "gateway"]));
+  res.json({ code: r.code, output: r.output });
+});
+
 app.post("/setup/api/restart-gateway", requireSetupAuth, async (_req, res) => {
   try {
     gatewayLogs.length = 0;
