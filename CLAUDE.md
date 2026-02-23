@@ -169,8 +169,8 @@ Edit `buildOnboardArgs()` (src/server.js:442-496) to add new CLI flags or auth p
 - **Dashboard**: `/dashboard` (Basic auth)
 - **Control UI**: `/openclaw` (no auth needed, token auto-injected)
 - **Setup Wizard**: `/setup` (Basic auth)
-- **Current Provider**: Anthropic direct (`anthropic/claude-sonnet-4-5`)
-- **Fallbacks**: `anthropic/claude-sonnet-4-0`, `openrouter/anthropic/claude-sonnet-4`
+- **Current Provider**: xAI/Grok (`xai/grok-4`)
+- **Fallbacks**: `xai/grok-4-fast`, `xai/grok-3`
 - **Agent timeout**: 180 seconds
 - **Cron jobs**: `daily-health-check` (9 AM ET), `hourly-heartbeat` (every 1h)
 - **Agent personality**: Addresses user as "Joe" or "Overlord" (see workspace SOUL.md)
