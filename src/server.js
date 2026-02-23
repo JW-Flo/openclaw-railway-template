@@ -106,6 +106,8 @@ function isConfigured() {
 let gatewayProc = null;
 let gatewayStarting = null;
 let shuttingDown = false;
+const gatewayLogs = []; // ring buffer for gateway output
+const GATEWAY_LOG_MAX = 200;
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -155,6 +157,7 @@ async function startGateway() {
 
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+  fs.mkdirSync(path.join(STATE_DIR, "credentials"), { recursive: true });
 
   for (const lockPath of [
     path.join(STATE_DIR, "gateway.lock"),
@@ -163,6 +166,19 @@ async function startGateway() {
     try {
       fs.rmSync(lockPath, { force: true });
     } catch {}
+  }
+
+  // Ensure gateway.mode is set (required since OpenClaw 2026.2.x)
+  try {
+    const cfgRaw = fs.readFileSync(configPath(), "utf8");
+    const cfg = JSON.parse(cfgRaw);
+    if (!cfg.gateway?.mode) {
+      console.log("[gateway] gateway.mode unset, setting to 'local'...");
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.mode", "local"]));
+      console.log(`[gateway] config set gateway.mode=local exit=${r.code}`);
+    }
+  } catch (err) {
+    console.warn(`[gateway] Could not check/fix gateway.mode: ${err.message}`);
   }
 
   const args = [
@@ -180,12 +196,26 @@ async function startGateway() {
   ];
 
   gatewayProc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
-    stdio: "inherit",
+    stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
       OPENCLAW_STATE_DIR: STATE_DIR,
       OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
     },
+  });
+
+  function pushLog(line) {
+    const entry = `[${new Date().toISOString()}] ${line}`;
+    gatewayLogs.push(entry);
+    if (gatewayLogs.length > GATEWAY_LOG_MAX) gatewayLogs.shift();
+    console.log(`[gateway] ${line}`);
+  }
+
+  gatewayProc.stdout.on("data", (d) => {
+    for (const line of d.toString("utf8").split("\n").filter(Boolean)) pushLog(line);
+  });
+  gatewayProc.stderr.on("data", (d) => {
+    for (const line of d.toString("utf8").split("\n").filter(Boolean)) pushLog(`[stderr] ${line}`);
   });
 
   const safeArgs = args.map((arg, i) =>
@@ -649,6 +679,12 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       );
       extra += `[config] gateway.controlUi.allowInsecureAuth=true exit=${allowInsecureResult.code}\n`;
 
+      const modeResult = await runCmd(
+        OPENCLAW_NODE,
+        clawArgs(["config", "set", "gateway.mode", "local"]),
+      );
+      extra += `[config] gateway.mode=local exit=${modeResult.code}\n`;
+
       const tokenResult = await runCmd(
         OPENCLAW_NODE,
         clawArgs([
@@ -772,6 +808,7 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       version: v.output.trim(),
       channelsAddHelpIncludesTelegram: help.output.includes("telegram"),
     },
+    gatewayLogs: gatewayLogs.slice(-50),
   });
 });
 
@@ -809,6 +846,26 @@ app.post("/setup/api/doctor", requireSetupAuth, async (_req, res) => {
     ok: result.code === 0,
     output: result.output,
   });
+});
+
+app.get("/setup/api/gateway-help", requireSetupAuth, async (_req, res) => {
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["gateway", "run", "--help"]));
+  res.json({ code: r.code, output: r.output });
+});
+
+app.post("/setup/api/config-get", requireSetupAuth, async (_req, res) => {
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get", "gateway"]));
+  res.json({ code: r.code, output: r.output });
+});
+
+app.post("/setup/api/restart-gateway", requireSetupAuth, async (_req, res) => {
+  try {
+    gatewayLogs.length = 0;
+    await restartGateway();
+    return res.json({ ok: true, logs: gatewayLogs.slice(-50) });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message, logs: gatewayLogs.slice(-50) });
+  }
 });
 
 app.get("/tui", requireSetupAuth, (_req, res) => {
