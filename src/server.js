@@ -1155,8 +1155,38 @@ app.use(async (req, res) => {
     }
   }
 
-  if (req.path === "/openclaw" && !req.query.token) {
-    return res.redirect(`/openclaw?token=${OPENCLAW_GATEWAY_TOKEN}`);
+  // Bootstrap the Control UI by injecting the gateway token into localStorage.
+  // The Control UI reads auth from localStorage["openclaw.control.settings.v1"].token
+  // but does NOT auto-populate it from the URL ?token= parameter. We serve a tiny
+  // bootstrap page that writes the token, then redirects to the actual proxied UI.
+  if (req.path === "/openclaw" && !req.query._boot) {
+    const tokenJson = JSON.stringify(OPENCLAW_GATEWAY_TOKEN);
+    const bootstrapHtml = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Connecting…</title>
+<style>body{display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#1a1a2e;color:#e0e0e0;font-family:system-ui,sans-serif}
+.loader{text-align:center}.spinner{width:40px;height:40px;border:3px solid #333;border-top-color:#7c3aed;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 16px}
+@keyframes spin{to{transform:rotate(360deg)}}</style></head>
+<body><div class="loader"><div class="spinner"></div><p>Connecting to OpenClaw…</p></div>
+<script>
+try {
+  var KEY = "openclaw.control.settings.v1";
+  var s = {};
+  try { s = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (_) {}
+  s.token = ${tokenJson};
+  localStorage.setItem(KEY, JSON.stringify(s));
+} catch (e) { console.warn("token bootstrap failed:", e); }
+window.location.replace("/openclaw?_boot=1");
+</script>
+<noscript><a href="/openclaw?_boot=1">Continue to OpenClaw</a></noscript>
+</body></html>`;
+    return res.type("html").send(bootstrapHtml);
+  }
+
+  // Strip the _boot query param before proxying so the gateway gets a clean URL.
+  if (req.query._boot) {
+    const u = new URL(req.url, `http://${req.headers.host}`);
+    u.searchParams.delete("_boot");
+    req.url = u.pathname + (u.search === "?" ? "" : u.search);
   }
 
   return proxy.web(req, res, { target: GATEWAY_TARGET });
