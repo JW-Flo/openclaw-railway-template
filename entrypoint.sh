@@ -1,8 +1,9 @@
 #!/bin/bash
 set -e
 
+mkdir -p /data/.openclaw/credentials /data/workspace
 chown -R openclaw:openclaw /data
-chmod 700 /data
+chmod 700 /data /data/.openclaw
 
 if [ ! -d /data/.linuxbrew ]; then
   cp -a /home/linuxbrew/.linuxbrew /data/.linuxbrew
