@@ -157,6 +157,7 @@ async function startGateway() {
 
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+  fs.mkdirSync(path.join(STATE_DIR, "credentials"), { recursive: true });
 
   for (const lockPath of [
     path.join(STATE_DIR, "gateway.lock"),
@@ -845,6 +846,16 @@ app.post("/setup/api/doctor", requireSetupAuth, async (_req, res) => {
     ok: result.code === 0,
     output: result.output,
   });
+});
+
+app.post("/setup/api/restart-gateway", requireSetupAuth, async (_req, res) => {
+  try {
+    gatewayLogs.length = 0;
+    await restartGateway();
+    return res.json({ ok: true, logs: gatewayLogs.slice(-50) });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message, logs: gatewayLogs.slice(-50) });
+  }
 });
 
 app.get("/tui", requireSetupAuth, (_req, res) => {
