@@ -1014,12 +1014,14 @@ const proxy = httpProxy.createProxyServer({
   target: GATEWAY_TARGET,
   ws: true,
   xfwd: true,
-  proxyTimeout: 120_000,
-  timeout: 120_000,
+  proxyTimeout: 0, // disable timeout for long-lived WebSocket connections
+  timeout: 0,      // disable socket timeout (keepalive handles liveness)
 });
 
 proxy.on("error", (err, _req, res) => {
-  console.error("[proxy]", err);
+  console.error("[proxy]", err.code || err.message);
+  // res is an HTTP ServerResponse for HTTP requests, but a raw Socket for WebSocket upgrades.
+  // Only send HTML error for HTTP responses; for sockets, just destroy cleanly.
   if (res && typeof res.headersSent !== "undefined" && !res.headersSent) {
     res.writeHead(503, { "Content-Type": "text/html" });
     try {
@@ -1031,6 +1033,9 @@ proxy.on("error", (err, _req, res) => {
     } catch {
       res.end("Gateway unavailable. Retrying...");
     }
+  } else if (res && typeof res.destroy === "function") {
+    // WebSocket socket — destroy cleanly instead of sending HTML
+    res.destroy();
   }
 });
 
@@ -1040,6 +1045,11 @@ proxy.on("proxyReq", (proxyReq, req, res) => {
 
 proxy.on("proxyReqWs", (proxyReq, req, socket, options, head) => {
   proxyReq.setHeader("Authorization", `Bearer ${OPENCLAW_GATEWAY_TOKEN}`);
+  // Also ensure token is in path for gateways that only check query params
+  if (proxyReq.path && !proxyReq.path.includes("token=")) {
+    const sep = proxyReq.path.includes("?") ? "&" : "?";
+    proxyReq.path += `${sep}token=${OPENCLAW_GATEWAY_TOKEN}`;
+  }
 });
 
 app.use(async (req, res) => {
@@ -1126,6 +1136,7 @@ server.on("upgrade", async (req, socket, head) => {
   }
 
   if (!isConfigured()) {
+    socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
     socket.destroy();
     return;
   }
@@ -1133,10 +1144,28 @@ server.on("upgrade", async (req, socket, head) => {
     await ensureGatewayRunning();
   } catch (err) {
     console.warn(`[websocket] gateway not ready: ${err.message}`);
+    socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
     socket.destroy();
     return;
   }
+
+  // Ensure token is in the URL query so the gateway Control UI accepts the connection.
+  // Browsers cannot set custom headers on WebSocket handshakes, so the gateway may
+  // only check the query parameter for pairing bypass.
+  const wsUrl = new URL(req.url, `http://${req.headers.host}`);
+  if (!wsUrl.searchParams.has("token")) {
+    wsUrl.searchParams.set("token", OPENCLAW_GATEWAY_TOKEN);
+    req.url = wsUrl.pathname + wsUrl.search;
+  }
+
   proxy.ws(req, socket, head, { target: GATEWAY_TARGET });
+});
+
+// Keep proxied WebSocket connections alive through Railway's load balancer.
+// Railway (and most cloud LBs) kill idle TCP connections after ~60s.
+// We send TCP-level keepalive on the upstream socket so the LB sees activity.
+proxy.on("open", (proxySocket) => {
+  proxySocket.setKeepAlive(true, 30_000); // TCP keepalive every 30s
 });
 
 async function gracefulShutdown(signal) {
