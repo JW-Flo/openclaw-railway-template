@@ -868,6 +868,86 @@ app.post("/setup/api/restart-gateway", requireSetupAuth, async (_req, res) => {
   }
 });
 
+// Workspace file management — write files into the agent workspace remotely
+app.post("/setup/api/workspace/write", requireSetupAuth, express.text({ limit: "1mb", type: "*/*" }), (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ ok: false, error: "Missing ?path= query param" });
+  const resolved = path.resolve(WORKSPACE_DIR, filePath);
+  if (!resolved.startsWith(WORKSPACE_DIR)) {
+    return res.status(400).json({ ok: false, error: "Path must be inside workspace" });
+  }
+  try {
+    fs.mkdirSync(path.dirname(resolved), { recursive: true });
+    fs.writeFileSync(resolved, req.body || "", "utf8");
+    return res.json({ ok: true, path: resolved });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get("/setup/api/workspace/read", requireSetupAuth, (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ ok: false, error: "Missing ?path= query param" });
+  const resolved = path.resolve(WORKSPACE_DIR, filePath);
+  if (!resolved.startsWith(WORKSPACE_DIR)) {
+    return res.status(400).json({ ok: false, error: "Path must be inside workspace" });
+  }
+  try {
+    const content = fs.readFileSync(resolved, "utf8");
+    return res.type("text/plain").send(content);
+  } catch (err) {
+    return res.status(404).json({ ok: false, error: err.message });
+  }
+});
+
+app.get("/setup/api/workspace/ls", requireSetupAuth, (req, res) => {
+  const dir = req.query.path || ".";
+  const resolved = path.resolve(WORKSPACE_DIR, dir);
+  if (!resolved.startsWith(WORKSPACE_DIR)) {
+    return res.status(400).json({ ok: false, error: "Path must be inside workspace" });
+  }
+  try {
+    const entries = fs.readdirSync(resolved, { withFileTypes: true }).map(e => ({
+      name: e.name,
+      type: e.isDirectory() ? "dir" : "file",
+    }));
+    return res.json({ ok: true, path: resolved, entries });
+  } catch (err) {
+    return res.status(404).json({ ok: false, error: err.message });
+  }
+});
+
+// Run openclaw CLI commands remotely (auth-protected)
+app.post("/setup/api/openclaw-cmd", requireSetupAuth, async (req, res) => {
+  const { args } = req.body || {};
+  if (!Array.isArray(args) || args.length === 0) {
+    return res.status(400).json({ ok: false, error: "Missing args array" });
+  }
+  // Block dangerous commands
+  const blocked = ["onboard", "gateway"];
+  if (blocked.includes(args[0])) {
+    return res.status(403).json({ ok: false, error: `Command '${args[0]}' is blocked via this API` });
+  }
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(args));
+  return res.json({ ok: r.code === 0, code: r.code, output: r.output });
+});
+
+// Run shell commands in workspace (auth-protected, use carefully)
+app.post("/setup/api/shell", requireSetupAuth, async (req, res) => {
+  const { command } = req.body || {};
+  if (!command || typeof command !== "string") {
+    return res.status(400).json({ ok: false, error: "Missing command string" });
+  }
+  // Safety: only allow specific safe commands
+  const allowed = ["ls", "cat", "git", "pwd", "whoami", "env", "mkdir", "echo", "head", "tail", "wc"];
+  const cmd = command.trim().split(/\s+/)[0];
+  if (!allowed.includes(cmd)) {
+    return res.status(403).json({ ok: false, error: `Command '${cmd}' not allowed. Allowed: ${allowed.join(", ")}` });
+  }
+  const r = await runCmd("sh", ["-c", command], { cwd: WORKSPACE_DIR });
+  return res.json({ ok: r.code === 0, code: r.code, output: r.output });
+});
+
 app.get("/tui", requireSetupAuth, (_req, res) => {
   if (!ENABLE_WEB_TUI) {
     return res
