@@ -1150,15 +1150,17 @@ app.post("/setup/api/shell", requireSetupAuth, async (req, res) => {
     return res.status(400).json({ ok: false, error: "Missing command string" });
   }
   // Safety: block dangerous commands (blocklist approach for flexibility)
+  // Use word-boundary regex to avoid false positives (e.g. "dd" matching "add")
   const blocked = [
-    "rm -rf /", "mkfs", "dd", "shutdown", "reboot", "poweroff", "halt",
-    "passwd", "useradd", "userdel", "groupadd", "groupdel",
-    "iptables", "ufw", "systemctl", "service",
-    "curl|sh", "wget|sh", "curl|bash", "wget|bash",
+    /\brm\s+-rf\s+\//, /\bmkfs\b/, /\bdd\b/, /\bshutdown\b/, /\breboot\b/,
+    /\bpoweroff\b/, /\bhalt\b/, /\bpasswd\b/, /\buseradd\b/, /\buserdel\b/,
+    /\bgroupadd\b/, /\bgroupdel\b/, /\biptables\b/, /\bufw\b/,
+    /\bsystemctl\b/, /\bservice\b/,
+    /curl\s*\|\s*sh/, /wget\s*\|\s*sh/, /curl\s*\|\s*bash/, /wget\s*\|\s*bash/,
   ];
   const cmdLower = command.trim().toLowerCase();
   for (const pattern of blocked) {
-    if (cmdLower.includes(pattern)) {
+    if (pattern.test(cmdLower)) {
       return res.status(403).json({ ok: false, error: `Command pattern '${pattern}' is blocked for safety` });
     }
   }
