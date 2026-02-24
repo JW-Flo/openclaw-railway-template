@@ -11,6 +11,7 @@ RUN apt-get update \
     python3-pip \
     build-essential \
     jq \
+    ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies for skills (e.g. web-search uses duckduckgo-search)
@@ -48,6 +49,24 @@ ENV HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
 ENV HOMEBREW_CELLAR="/home/linuxbrew/.linuxbrew/Cellar"
 ENV HOMEBREW_REPOSITORY="/home/linuxbrew/.linuxbrew/Homebrew"
 
+# Install skill dependencies via brew (uv for nano-banana-pro, himalaya for email)
+RUN brew install uv himalaya
+
+# Create npx wrapper scripts for skill CLIs not available via brew/apt
+RUN mkdir -p /home/openclaw/.local/bin \
+  && for cmd in clawhub summarize mcporter xurl obsidian-cli oracle gemini; do \
+       case "$cmd" in \
+         gemini) pkg="@google/gemini-cli" ;; \
+         claude) pkg="@anthropic-ai/claude-code" ;; \
+         *) pkg="$cmd" ;; \
+       esac; \
+       printf '#!/bin/sh\nexec npx %s@latest "$@"\n' "$pkg" > "/home/openclaw/.local/bin/$cmd"; \
+       chmod +x "/home/openclaw/.local/bin/$cmd"; \
+     done \
+  && printf '#!/bin/sh\nexec npx @anthropic-ai/claude-code@latest "$@"\n' > /home/openclaw/.local/bin/claude \
+  && chmod +x /home/openclaw/.local/bin/claude
+
+ENV PATH="/home/openclaw/.local/bin:${PATH}"
 ENV PORT=8080
 ENV OPENCLAW_ENTRY=/usr/local/lib/node_modules/openclaw/dist/entry.js
 EXPOSE 8080
