@@ -8,9 +8,13 @@ RUN apt-get update \
     gosu \
     procps \
     python3 \
+    python3-pip \
     build-essential \
     jq \
   && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies for skills (e.g. web-search uses duckduckgo-search)
+RUN pip install --break-system-packages duckduckgo-search
 
 # Install GitHub CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
