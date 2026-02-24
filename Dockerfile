@@ -20,7 +20,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y gh && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g openclaw@latest wrangler@latest @railway/cli@latest
+RUN npm install -g openclaw@latest wrangler@latest @railway/cli@latest clawhub@latest
 
 WORKDIR /app
 

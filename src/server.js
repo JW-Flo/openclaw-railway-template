@@ -1065,6 +1065,77 @@ app.get("/setup/api/models/list", requireSetupAuth, async (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Skills management APIs
+// ---------------------------------------------------------------------------
+app.get("/setup/api/skills/list", requireSetupAuth, async (_req, res) => {
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["skills", "list"]));
+  return res.json({ ok: r.code === 0, output: r.output });
+});
+
+app.get("/setup/api/skills/eligible", requireSetupAuth, async (_req, res) => {
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["skills", "list", "--eligible"]));
+  return res.json({ ok: r.code === 0, output: r.output });
+});
+
+app.post("/setup/api/skills/enable", requireSetupAuth, async (req, res) => {
+  const { name } = req.body || {};
+  if (!name || typeof name !== "string") {
+    return res.status(400).json({ ok: false, error: "Missing skill name" });
+  }
+  const names = name.trim().split(/\s+/);
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["skills", "enable", ...names]));
+  return res.json({ ok: r.code === 0, output: r.output });
+});
+
+app.post("/setup/api/skills/disable", requireSetupAuth, async (req, res) => {
+  const { name } = req.body || {};
+  if (!name || typeof name !== "string") {
+    return res.status(400).json({ ok: false, error: "Missing skill name" });
+  }
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["skills", "disable", name.trim()]));
+  return res.json({ ok: r.code === 0, output: r.output });
+});
+
+app.post("/setup/api/skills/install", requireSetupAuth, async (req, res) => {
+  const { source } = req.body || {};
+  if (!source || typeof source !== "string") {
+    return res.status(400).json({ ok: false, error: "Missing source (e.g. clawhub slug or github:user/repo)" });
+  }
+  // Try clawhub install first, fall back to openclaw skills install
+  const src = source.trim();
+  let r;
+  if (src.startsWith("github:") || src.startsWith("@")) {
+    r = await runCmd(OPENCLAW_NODE, clawArgs(["skills", "install", src]));
+  } else {
+    // Try npx clawhub install
+    r = await runCmd("npx", ["clawhub@latest", "install", src]);
+    if (r.code !== 0) {
+      // Fallback to openclaw skills install
+      r = await runCmd(OPENCLAW_NODE, clawArgs(["skills", "install", src]));
+    }
+  }
+  return res.json({ ok: r.code === 0, output: r.output });
+});
+
+app.post("/setup/api/skills/search", requireSetupAuth, async (req, res) => {
+  const { query } = req.body || {};
+  if (!query || typeof query !== "string") {
+    return res.status(400).json({ ok: false, error: "Missing search query" });
+  }
+  const r = await runCmd("npx", ["clawhub@latest", "search", query.trim()]);
+  return res.json({ ok: r.code === 0, output: r.output });
+});
+
+app.get("/setup/api/skills/info/:name", requireSetupAuth, async (req, res) => {
+  const name = req.params.name;
+  if (!name) {
+    return res.status(400).json({ ok: false, error: "Missing skill name" });
+  }
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["skills", "info", name]));
+  return res.json({ ok: r.code === 0, output: r.output });
+});
+
+// ---------------------------------------------------------------------------
 // Project management APIs
 // ---------------------------------------------------------------------------
 app.get("/setup/api/projects/status", requireSetupAuth, async (_req, res) => {
