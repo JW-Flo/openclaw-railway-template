@@ -1077,43 +1077,29 @@ app.get("/setup/api/skills/eligible", requireSetupAuth, async (_req, res) => {
   return res.json({ ok: r.code === 0, output: r.output });
 });
 
-app.post("/setup/api/skills/enable", requireSetupAuth, async (req, res) => {
-  const { name } = req.body || {};
-  if (!name || typeof name !== "string") {
-    return res.status(400).json({ ok: false, error: "Missing skill name" });
-  }
-  const names = name.trim().split(/\s+/);
-  const r = await runCmd(OPENCLAW_NODE, clawArgs(["skills", "enable", ...names]));
-  return res.json({ ok: r.code === 0, output: r.output });
-});
-
-app.post("/setup/api/skills/disable", requireSetupAuth, async (req, res) => {
-  const { name } = req.body || {};
-  if (!name || typeof name !== "string") {
-    return res.status(400).json({ ok: false, error: "Missing skill name" });
-  }
-  const r = await runCmd(OPENCLAW_NODE, clawArgs(["skills", "disable", name.trim()]));
+app.get("/setup/api/skills/check", requireSetupAuth, async (_req, res) => {
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["skills", "check"]));
   return res.json({ ok: r.code === 0, output: r.output });
 });
 
 app.post("/setup/api/skills/install", requireSetupAuth, async (req, res) => {
-  const { source } = req.body || {};
+  const { source, force } = req.body || {};
   if (!source || typeof source !== "string") {
     return res.status(400).json({ ok: false, error: "Missing source (e.g. clawhub slug or github:user/repo)" });
   }
-  // Try clawhub install first, fall back to openclaw skills install
   const src = source.trim();
-  let r;
-  if (src.startsWith("github:") || src.startsWith("@")) {
-    r = await runCmd(OPENCLAW_NODE, clawArgs(["skills", "install", src]));
-  } else {
-    // Try npx clawhub install
-    r = await runCmd("npx", ["clawhub@latest", "install", src]);
-    if (r.code !== 0) {
-      // Fallback to openclaw skills install
-      r = await runCmd(OPENCLAW_NODE, clawArgs(["skills", "install", src]));
-    }
+  const clawHubArgs = ["clawhub@latest", "install", src, "--no-input", "--workdir", WORKSPACE_DIR];
+  if (force) clawHubArgs.push("--force");
+  const r = await runCmd("npx", clawHubArgs);
+  return res.json({ ok: r.code === 0, output: r.output });
+});
+
+app.post("/setup/api/skills/uninstall", requireSetupAuth, async (req, res) => {
+  const { name } = req.body || {};
+  if (!name || typeof name !== "string") {
+    return res.status(400).json({ ok: false, error: "Missing skill name" });
   }
+  const r = await runCmd("npx", ["clawhub@latest", "uninstall", name.trim(), "--no-input", "--workdir", WORKSPACE_DIR]);
   return res.json({ ok: r.code === 0, output: r.output });
 });
 
@@ -1122,7 +1108,7 @@ app.post("/setup/api/skills/search", requireSetupAuth, async (req, res) => {
   if (!query || typeof query !== "string") {
     return res.status(400).json({ ok: false, error: "Missing search query" });
   }
-  const r = await runCmd("npx", ["clawhub@latest", "search", query.trim()]);
+  const r = await runCmd("npx", ["clawhub@latest", "search", ...query.trim().split(/\s+/), "--no-input"]);
   return res.json({ ok: r.code === 0, output: r.output });
 });
 

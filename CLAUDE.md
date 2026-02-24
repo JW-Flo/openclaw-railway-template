@@ -238,17 +238,16 @@ Valid `authChoice` values: `apiKey` (Anthropic), `openrouter-api-key`, `openai-a
 curl -s -H "Authorization: Basic $AUTH" .../setup/api/skills/list
 # List only eligible skills
 curl -s -H "Authorization: Basic $AUTH" .../setup/api/skills/eligible
-# Enable a skill
-curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
-  .../setup/api/skills/enable -d '{"name":"skill-name"}'
-# Disable a skill
-curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
-  .../setup/api/skills/disable -d '{"name":"skill-name"}'
-# Install from ClawHub or GitHub
+# Check skill requirements
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/skills/check
+# Install from ClawHub (use force:true for VirusTotal-flagged skills after vetting)
 curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
   .../setup/api/skills/install -d '{"source":"clawhub-slug"}'
 curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
-  .../setup/api/skills/install -d '{"source":"github:user/skill-repo"}'
+  .../setup/api/skills/install -d '{"source":"clawhub-slug","force":true}'
+# Uninstall a workspace skill
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/skills/uninstall -d '{"name":"skill-name"}'
 # Search ClawHub
 curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
   .../setup/api/skills/search -d '{"query":"web search"}'
@@ -256,7 +255,7 @@ curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/js
 curl -s -H "Authorization: Basic $AUTH" .../setup/api/skills/info/skill-name
 ```
 
-**Note**: Skills are snapshotted when a session starts. Changes take effect on the next new session. The dashboard has a Skills tab for visual management.
+**Note**: Skills auto-load when their requirements are met (no explicit enable/disable). Skills are snapshotted when a session starts — changes take effect on the next new session. The dashboard has a Skills tab for visual management.
 
 ### Model Management
 

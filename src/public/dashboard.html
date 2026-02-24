@@ -357,8 +357,11 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
         <div id="skills-search-results" style="font-family:var(--mono);font-size:12px;color:var(--text2);max-height:300px;overflow-y:auto;white-space:pre-wrap;display:none;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;border:1px solid var(--border);"></div>
         <div class="form-group" style="margin-top:12px">
           <label>Install Skill (ClawHub slug, or github:user/repo)</label>
-          <div style="display:flex;gap:8px;">
+          <div style="display:flex;gap:8px;align-items:center;">
             <input type="text" id="skills-install-input" placeholder="e.g. skill-name or github:user/skill-repo">
+            <label style="font-size:12px;color:var(--text2);white-space:nowrap;display:flex;align-items:center;gap:4px;cursor:pointer">
+              <input type="checkbox" id="skills-install-force"> Force
+            </label>
             <button class="btn primary" id="btn-install-skill">Install</button>
           </div>
         </div>
@@ -543,36 +546,40 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     const tbody = document.getElementById("skills-tbody");
     tbody.innerHTML = '<tr class="loading-row"><td colspan="3"><span class="spinner"></span> Loading...</td></tr>';
     try {
-      const data = await api("GET", "/setup/api/skills/list");
+      const data = await api("GET", "/setup/api/skills/eligible");
       const output = data.output || "";
-      // Parse skill lines from openclaw skills list output
-      // Typical format: "  skill-name  description  [enabled/disabled]"
-      const lines = output.split("\n").filter(l => l.trim());
+      // Parse table rows from openclaw skills list output
+      // Format: "│ ✓ ready  │ name │ description │ source │"
+      const lines = output.split("\n").filter(l => l.includes("│") && !l.includes("──") && !l.includes("Status"));
       if (lines.length === 0) {
         tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--text2);padding:24px">No skills found. Install skills from ClawHub below.</td></tr>';
         return;
       }
       let rows = "";
+      const seen = new Set();
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith("─") || trimmed.startsWith("=") || trimmed.toLowerCase().startsWith("name")) continue;
-        // Try to extract skill name and enabled state
-        const parts = trimmed.split(/\s{2,}/);
-        const name = parts[0] || trimmed;
-        const isEnabled = !trimmed.toLowerCase().includes("disabled");
-        const statusHtml = isEnabled
-          ? dot("green") + " Enabled"
-          : dot("red") + " Disabled";
-        const actionBtn = isEnabled
-          ? '<button class="btn" onclick="toggleSkill(\'' + name + '\', false)" style="padding:4px 10px;font-size:12px">Disable</button>'
-          : '<button class="btn primary" onclick="toggleSkill(\'' + name + '\', true)" style="padding:4px 10px;font-size:12px">Enable</button>';
+        const cells = line.split("│").map(c => c.trim()).filter(Boolean);
+        if (cells.length < 3) continue;
+        const status = cells[0];
+        // Extract skill name (strip emoji prefix)
+        const rawName = cells[1].replace(/^[\s\S]{1,4}\s+/, "").trim();
+        if (!rawName || seen.has(rawName)) continue;
+        seen.add(rawName);
+        const isReady = status.includes("ready");
+        const source = cells[3] || "";
+        const isWorkspace = source.includes("workspace");
+        const statusHtml = isReady
+          ? dot("green") + " Ready"
+          : dot("red") + " Missing";
+        const actionBtn = isWorkspace
+          ? '<button class="btn" onclick="uninstallSkill(\'' + rawName + '\')" style="padding:4px 10px;font-size:12px">Uninstall</button>'
+          : '<span style="color:var(--text2);font-size:11px">bundled</span>';
         rows += '<tr>' +
-          '<td style="font-weight:600;font-family:var(--mono);font-size:12px">' + name + '</td>' +
+          '<td style="font-weight:600;font-family:var(--mono);font-size:12px">' + rawName + '</td>' +
           '<td>' + statusHtml + '</td>' +
           '<td>' + actionBtn + '</td></tr>';
       }
       if (!rows) {
-        // If parsing didn't produce rows, show raw output
         tbody.innerHTML = '<tr><td colspan="3" style="font-family:var(--mono);font-size:12px;white-space:pre-wrap;padding:12px">' + output + '</td></tr>';
       } else {
         tbody.innerHTML = rows;
@@ -582,14 +589,12 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     }
   }
 
-  // Expose toggleSkill globally for inline onclick
-  window.toggleSkill = async function(name, enable) {
+  window.uninstallSkill = async function(name) {
     const out = document.getElementById("skills-output");
     out.classList.add("visible");
-    out.textContent = (enable ? "Enabling" : "Disabling") + " " + name + "...\n";
+    out.textContent = "Uninstalling " + name + "...\n";
     try {
-      const endpoint = enable ? "/setup/api/skills/enable" : "/setup/api/skills/disable";
-      const data = await api("POST", endpoint, { name });
+      const data = await api("POST", "/setup/api/skills/uninstall", { name });
       out.textContent += data.output || JSON.stringify(data, null, 2);
       await loadSkills();
     } catch (err) {
@@ -616,13 +621,15 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
 
   document.getElementById("btn-install-skill").addEventListener("click", async () => {
     const input = document.getElementById("skills-install-input");
+    const forceCheckbox = document.getElementById("skills-install-force");
     const out = document.getElementById("skills-output");
     const source = input.value.trim();
     if (!source) return;
+    const force = forceCheckbox.checked;
     out.classList.add("visible");
-    out.textContent = "Installing " + source + "...\n";
+    out.textContent = "Installing " + source + (force ? " (force)" : "") + "...\n";
     try {
-      const data = await api("POST", "/setup/api/skills/install", { source });
+      const data = await api("POST", "/setup/api/skills/install", { source, force });
       out.textContent += data.output || JSON.stringify(data, null, 2);
       await loadSkills();
     } catch (err) {
