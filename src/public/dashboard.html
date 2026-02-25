@@ -275,6 +275,75 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
 .toast.error { border-left: 3px solid var(--red); }
 .toast.info { border-left: 3px solid var(--blue); }
 
+/* ── News Ticker Banner ───────────────────────────────────────────────── */
+.ticker-bar {
+  background: var(--surface2); border-bottom: 1px solid var(--border);
+  overflow: hidden; height: 30px; position: relative;
+  display: flex; align-items: center;
+}
+.ticker-bar.hidden { display: none; }
+.ticker-label {
+  background: var(--accent); color: #fff; font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  padding: 0 10px; height: 100%; display: flex; align-items: center;
+  white-space: nowrap; z-index: 1; flex-shrink: 0;
+}
+.ticker-track {
+  flex: 1; overflow: hidden; position: relative; height: 100%;
+  mask-image: linear-gradient(90deg, transparent 0%, black 3%, black 97%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, black 3%, black 97%, transparent 100%);
+}
+.ticker-content {
+  display: flex; align-items: center; gap: 32px;
+  position: absolute; left: 0; top: 0; height: 100%;
+  white-space: nowrap; will-change: transform;
+  animation: tickerScroll var(--ticker-speed, 30s) linear infinite;
+}
+.ticker-content:hover { animation-play-state: paused; }
+@keyframes tickerScroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.ticker-item {
+  font-size: 12px; font-family: var(--mono); color: var(--text2);
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+}
+.ticker-item .ticker-type {
+  font-size: 9px; padding: 1px 5px; border-radius: 3px;
+  text-transform: uppercase; font-weight: 600;
+}
+.ticker-type.signal { background: var(--blue); color: #fff; }
+.ticker-type.trade { background: var(--green); color: #fff; }
+.ticker-type.position { background: var(--yellow); color: #000; }
+.ticker-type.info { background: var(--accent); color: #fff; }
+.ticker-dismiss {
+  background: none; border: none; color: var(--text2); cursor: pointer;
+  font-size: 14px; padding: 0 8px; height: 100%; flex-shrink: 0;
+}
+.ticker-dismiss:hover { color: var(--text); }
+
+/* ── AI Ideas Panel ───────────────────────────────────────────────────── */
+.ideas-panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; margin-bottom: 20px; overflow: hidden;
+  box-shadow: var(--shadow);
+}
+.ideas-panel h3 { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.ideas-stream {
+  padding: 12px; font-family: var(--mono); font-size: 12px;
+  color: var(--text2); max-height: 300px; overflow-y: auto;
+  white-space: pre-wrap;
+}
+.idea-card {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px 12px; margin-bottom: 8px;
+}
+.idea-card h4 { font-size: 13px; color: var(--text); margin-bottom: 4px; }
+.idea-card p { font-size: 12px; color: var(--text2); margin-bottom: 4px; }
+.idea-card .idea-meta {
+  display: flex; gap: 8px; font-size: 11px; color: var(--text2);
+}
+.idea-card .idea-meta span {
+  background: var(--bg); padding: 1px 6px; border-radius: 3px;
+}
+
 /* ── Responsive ───────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .header { padding: 10px 14px; }
@@ -312,6 +381,15 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     </div>
     <button class="theme-toggle" id="theme-toggle" title="Toggle theme (Ctrl+Shift+T)">&#9789;</button>
   </div>
+</div>
+
+<!-- News Ticker Banner -->
+<div class="ticker-bar" id="ticker-bar">
+  <div class="ticker-label">LIVE</div>
+  <div class="ticker-track">
+    <div class="ticker-content" id="ticker-content"></div>
+  </div>
+  <button class="ticker-dismiss" id="ticker-dismiss" title="Hide ticker">&times;</button>
 </div>
 
 <div class="tabs" id="main-tabs">
@@ -385,6 +463,14 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
       <div class="table-wrap">
         <h3>Files</h3>
         <ul class="file-list" id="proj-files"></ul>
+      </div>
+      <!-- AI Ideas (streamed) -->
+      <div class="ideas-panel">
+        <h3>AI Project Ideas <button class="btn sm" id="btn-generate-ideas">Generate Ideas</button></h3>
+        <div id="ideas-container" style="padding:12px;display:none">
+          <div id="ideas-stream" class="ideas-stream"></div>
+          <div id="ideas-cards"></div>
+        </div>
       </div>
       <div class="output" id="proj-action-output"></div>
     </div>
@@ -1015,7 +1101,8 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     { name: "Activity Log", action: function() { switchTab("activity"); }, shortcut: "6" },
     { name: "Toggle Theme", action: function() { document.getElementById("theme-toggle").click(); }, shortcut: "T" },
     { name: "Sync Projects", action: function() { switchTab("projects"); document.getElementById("btn-sync-projects").click(); } },
-    { name: "Refresh All", action: function() { loadAll(); toast("Refreshing all data", "info"); } },
+    { name: "Refresh All", action: function() { loadAll(); loadTicker(); toast("Refreshing all data", "info"); } },
+    { name: "Show Ticker", action: function() { document.getElementById("ticker-bar").classList.remove("hidden"); localStorage.removeItem("jclaw-ticker-hidden"); loadTicker(); } },
     { name: "Go to Setup", action: function() { window.location.href = "/setup"; } },
     { name: "Go to Control UI", action: function() { window.location.href = "/openclaw"; } },
     { name: "Go to TUI", action: function() { window.location.href = "/tui"; } },
@@ -1112,6 +1199,187 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
       if (tabMap[e.key]) { switchTab(tabMap[e.key]); return; }
     }
   });
+
+  // ── News Ticker ───────────────────────────────────────────────────────
+  var tickerHidden = localStorage.getItem("jclaw-ticker-hidden") === "true";
+  if (tickerHidden) document.getElementById("ticker-bar").classList.add("hidden");
+
+  document.getElementById("ticker-dismiss").addEventListener("click", function() {
+    document.getElementById("ticker-bar").classList.add("hidden");
+    localStorage.setItem("jclaw-ticker-hidden", "true");
+  });
+
+  async function loadTicker() {
+    var bar = document.getElementById("ticker-bar");
+    if (bar.classList.contains("hidden")) return;
+
+    try {
+      var configP = api("GET", "/setup/api/ticker/config").catch(function() { return { config: { enabled: true } }; });
+      var dataP = api("GET", "/setup/api/market/ticker").catch(function() { return { items: [] }; });
+      var results = await Promise.all([configP, dataP]);
+      var config = results[0].config || {};
+      var items = results[1].items || [];
+
+      if (!config.enabled) { bar.classList.add("hidden"); return; }
+
+      // Add manual items
+      if (config.sources?.manual?.enabled && config.sources.manual.items?.length) {
+        config.sources.manual.items.forEach(function(text) {
+          items.push({ type: "info", text: text, ts: new Date().toISOString(), source: "manual" });
+        });
+      }
+
+      if (items.length === 0) {
+        // Show a default message if no data
+        items.push({ type: "info", text: "No market data available. Connect market_agents or add manual ticker items in settings.", source: "default" });
+      }
+
+      // Set scroll speed from config
+      var speed = (config.speed || 30) + "s";
+      var content = document.getElementById("ticker-content");
+      content.style.setProperty("--ticker-speed", speed);
+      content.style.animationDuration = speed;
+
+      // Build ticker items (duplicate for seamless loop)
+      var html = "";
+      function buildItems(list) {
+        var out = "";
+        for (var i = 0; i < list.length; i++) {
+          var item = list[i];
+          var typeClass = item.type || "info";
+          out += '<span class="ticker-item">' +
+            '<span class="ticker-type ' + esc(typeClass) + '">' + esc(item.type || "info") + '</span> ' +
+            esc(item.text || "") +
+          '</span>';
+        }
+        return out;
+      }
+      html = buildItems(items) + buildItems(items); // duplicate for seamless loop
+      content.innerHTML = html;
+    } catch {
+      // Ticker data unavailable, hide gracefully
+    }
+  }
+  loadTicker();
+  // Refresh ticker data every 2 minutes
+  setInterval(loadTicker, 120000);
+
+  // ── AI Ideas Streaming ───────────────────────────────────────────────
+  document.getElementById("btn-generate-ideas").addEventListener("click", function() {
+    var btn = this;
+    var container = document.getElementById("ideas-container");
+    var stream = document.getElementById("ideas-stream");
+    var cardsDiv = document.getElementById("ideas-cards");
+
+    container.style.display = "block";
+    stream.textContent = "Generating ideas";
+    stream.style.display = "block";
+    cardsDiv.innerHTML = "";
+    btn.disabled = true;
+    btn.textContent = "Generating...";
+
+    // Animate the "Generating ideas..." text
+    var dots = 0;
+    var dotTimer = setInterval(function() {
+      dots = (dots + 1) % 4;
+      var dotsStr = "";
+      for (var d = 0; d < dots; d++) dotsStr += ".";
+      stream.textContent = "Generating ideas" + dotsStr;
+    }, 500);
+
+    // Use SSE streaming via fetch
+    var context = currentProject ? "Focus on the " + currentProject + " project." : "";
+    fetch("/setup/api/projects/ideas", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ context: context, stream: true }),
+    }).then(function(response) {
+      clearInterval(dotTimer);
+      if (!response.ok) {
+        stream.textContent = "Error: " + response.status;
+        btn.disabled = false;
+        btn.textContent = "Generate Ideas";
+        return;
+      }
+
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = "";
+      var fullText = "";
+
+      function processChunk(result) {
+        if (result.done) {
+          // Parse final ideas from accumulated text
+          parseAndRenderIdeas(fullText, cardsDiv, stream);
+          btn.disabled = false;
+          btn.textContent = "Generate Ideas";
+          return;
+        }
+
+        buffer += decoder.decode(result.value, { stream: true });
+        var lines = buffer.split("\n");
+        buffer = lines.pop(); // keep incomplete line
+
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i];
+          if (line.startsWith("data: ")) {
+            try {
+              var data = JSON.parse(line.slice(6));
+              if (data.text) {
+                fullText += data.text;
+                stream.textContent = fullText.slice(-2000);
+                stream.scrollTop = stream.scrollHeight;
+              }
+              if (data.ideas && data.ideas.length > 0) {
+                renderIdeaCards(data.ideas, cardsDiv);
+                stream.style.display = "none";
+              }
+            } catch { /* not JSON */ }
+          }
+        }
+
+        return reader.read().then(processChunk);
+      }
+
+      return reader.read().then(processChunk);
+    }).catch(function(err) {
+      clearInterval(dotTimer);
+      stream.textContent = "Error: " + err.message;
+      btn.disabled = false;
+      btn.textContent = "Generate Ideas";
+    });
+  });
+
+  function parseAndRenderIdeas(text, cardsDiv, stream) {
+    // Try to extract JSON array from accumulated text
+    var jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      try {
+        var ideas = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(ideas) && ideas.length > 0) {
+          renderIdeaCards(ideas, cardsDiv);
+          stream.style.display = "none";
+          return;
+        }
+      } catch { /* fall through */ }
+    }
+    // If no JSON found, keep the raw output visible
+    stream.textContent = text || "(no ideas generated)";
+  }
+
+  function renderIdeaCards(ideas, container) {
+    container.innerHTML = ideas.map(function(idea) {
+      return '<div class="idea-card">' +
+        '<h4>' + esc(idea.name || idea.title || "Untitled") + '</h4>' +
+        '<p>' + esc(idea.description || "") + '</p>' +
+        '<div class="idea-meta">' +
+          (idea.category ? '<span>' + esc(idea.category) + '</span>' : '') +
+          (idea.difficulty ? '<span>' + esc(idea.difficulty) + '</span>' : '') +
+          (idea.template ? '<span>' + esc(idea.template) + '</span>' : '') +
+        '</div>' +
+      '</div>';
+    }).join("");
+  }
 
   // ── Load All Data ────────────────────────────────────────────────────
   function loadAll() {
