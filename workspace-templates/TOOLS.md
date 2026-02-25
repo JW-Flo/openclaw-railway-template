@@ -53,7 +53,17 @@ clawhub list
 clawhub update --all
 ```
 
-### Creating Custom Skills
+### Custom Skills (workspace-specific)
+
+These skills are tailored to the managed projects and deploy workflows:
+
+| Skill | Description |
+|-------|-------------|
+| `project-ops` | Fleet-wide git operations: sync, status, branch management across all 4 repos |
+| `market-agents` | Trading bot management: positions, signals, SQLite queries, health checks |
+| `deploy-pipeline` | Railway & Cloudflare CI/CD: deploy, verify, rollback, env var management |
+
+### Creating New Custom Skills
 Place a directory in `/data/workspace/skills/<skill-name>/` with a `SKILL.md` file:
 ```yaml
 ---
