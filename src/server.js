@@ -52,7 +52,8 @@ function readTaskQueue() {
   const queuePath = path.join(STATE_DIR, "task-queue.json");
   try {
     return JSON.parse(fs.readFileSync(queuePath, "utf8"));
-  } catch {
+  } catch (err) {
+    console.warn("[task-queue] read/parse error, using default:", err.message);
     const defaultQueue = {
       tasks: [],
       history: [],
@@ -1297,20 +1298,26 @@ app.get("/setup/api/runner/queue", requireSetupAuth, (_req, res) => {
 // Add a task to the queue
 app.post("/setup/api/runner/add", requireSetupAuth, (req, res) => {
   const { project, title, description, priority } = req.body || {};
-  if (!title || typeof title !== "string") {
-    return res.status(400).json({ ok: false, error: "Missing required field: title" });
+  if (!title || typeof title !== "string" || title.length > 500) {
+    return res.status(400).json({ ok: false, error: "title is required (string, max 500 chars)" });
   }
   const queue = readTaskQueue();
+  if (queue.tasks.length >= 200) {
+    return res.status(400).json({ ok: false, error: "Task queue full (max 200 tasks)" });
+  }
+  const validPriority = Number.isInteger(priority) && priority >= 1 && priority <= 10 ? priority : 3;
   const task = {
     id: crypto.randomUUID(),
-    project: project || null,
-    title,
-    description: description || "",
-    priority: typeof priority === "number" ? priority : 3,
+    project: typeof project === "string" ? project.slice(0, 200) : null,
+    title: title.slice(0, 500),
+    description: typeof description === "string" ? description.slice(0, 5000) : "",
+    priority: validPriority,
     status: "pending",
     createdAt: new Date().toISOString(),
   };
   queue.tasks.push(task);
+  // Cap history to prevent unbounded growth
+  if (queue.history.length > 500) queue.history = queue.history.slice(-500);
   writeTaskQueue(queue);
   return res.json({ ok: true, task });
 });
@@ -1345,7 +1352,7 @@ app.post("/setup/api/runner/reorder", requireSetupAuth, (req, res) => {
   if (!task) {
     return res.status(404).json({ ok: false, error: "Task not found" });
   }
-  task.priority = priority;
+  task.priority = Number.isInteger(priority) && priority >= 1 && priority <= 10 ? priority : task.priority;
   writeTaskQueue(queue);
   return res.json({ ok: true, task });
 });
@@ -1376,19 +1383,24 @@ app.get("/setup/api/runner/history", requireSetupAuth, (_req, res) => {
   return res.json({ ok: true, history });
 });
 
-// Update runner config (partial merge)
+// Update runner config (whitelist-based merge to prevent prototype pollution)
 app.post("/setup/api/runner/config", requireSetupAuth, (req, res) => {
   const updates = req.body || {};
   if (typeof updates !== "object" || Array.isArray(updates)) {
     return res.status(400).json({ ok: false, error: "Body must be a JSON object" });
   }
   const queue = readTaskQueue();
-  // Deep merge engines if provided
-  if (updates.engines && typeof updates.engines === "object") {
-    queue.config.engines = { ...queue.config.engines, ...updates.engines };
-    delete updates.engines;
+  const allowed = ["maxConcurrent", "pauseBetweenTasks", "dailyTaskLimit", "paused"];
+  for (const key of allowed) {
+    if (key in updates) queue.config[key] = updates[key];
   }
-  Object.assign(queue.config, updates);
+  if (updates.engines && typeof updates.engines === "object" && !Array.isArray(updates.engines)) {
+    const safeEngines = {};
+    for (const [k, v] of Object.entries(updates.engines)) {
+      if (k !== "__proto__" && k !== "constructor" && k !== "prototype") safeEngines[k] = v;
+    }
+    queue.config.engines = { ...queue.config.engines, ...safeEngines };
+  }
   writeTaskQueue(queue);
   return res.json({ ok: true, config: queue.config });
 });
