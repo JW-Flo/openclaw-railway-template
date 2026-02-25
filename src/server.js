@@ -77,6 +77,337 @@ function writeTaskQueue(queue) {
   fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
 }
 
+// ── Model Pool & Auto-Scheduler ─────────────────────────────────────────
+
+const MODEL_POOL_PATH = path.join(STATE_DIR, "model-pool.json");
+
+function defaultModelPool() {
+  return {
+    models: [
+      {
+        id: "xai/grok-4",
+        provider: "xai",
+        tier: "premium",
+        costPer1kTokens: 0.03,
+        dailyLimit: 20,
+        usedToday: 0,
+        lastResetDate: "",
+        enabled: true,
+        priority: 1,
+        minTaskPriority: 1,
+        maxTaskPriority: 10,
+        capabilities: ["code", "analysis", "planning"],
+      },
+      {
+        id: "xai/grok-4-fast",
+        provider: "xai",
+        tier: "standard",
+        costPer1kTokens: 0.01,
+        dailyLimit: 30,
+        usedToday: 0,
+        lastResetDate: "",
+        enabled: true,
+        priority: 2,
+        minTaskPriority: 1,
+        maxTaskPriority: 10,
+        capabilities: ["code", "analysis"],
+      },
+      {
+        id: "openrouter/auto",
+        provider: "openrouter",
+        tier: "standard",
+        costPer1kTokens: 0.005,
+        dailyLimit: 25,
+        usedToday: 0,
+        lastResetDate: "",
+        enabled: true,
+        priority: 3,
+        minTaskPriority: 1,
+        maxTaskPriority: 10,
+        capabilities: ["code", "analysis", "planning"],
+      },
+      {
+        id: "google/gemini-2.5-flash:free",
+        provider: "google",
+        tier: "free",
+        costPer1kTokens: 0,
+        dailyLimit: 50,
+        usedToday: 0,
+        lastResetDate: "",
+        enabled: true,
+        priority: 4,
+        minTaskPriority: 4,
+        maxTaskPriority: 10,
+        capabilities: ["code", "analysis"],
+      },
+      {
+        id: "openrouter/qwen/qwen3-coder:free",
+        provider: "openrouter",
+        tier: "free",
+        costPer1kTokens: 0,
+        dailyLimit: 50,
+        usedToday: 0,
+        lastResetDate: "",
+        enabled: true,
+        priority: 5,
+        minTaskPriority: 5,
+        maxTaskPriority: 10,
+        capabilities: ["code"],
+      },
+    ],
+    scheduler: {
+      enabled: false,
+      intervalSeconds: 600,
+      strategy: "cost-optimized",
+      maxConcurrent: 1,
+      pauseStart: "00:00",
+      pauseEnd: "06:00",
+      timezone: "America/Chicago",
+    },
+  };
+}
+
+function readModelPool() {
+  try {
+    const data = JSON.parse(fs.readFileSync(MODEL_POOL_PATH, "utf8"));
+    if (!data.models || !data.scheduler) throw new Error("invalid");
+    return data;
+  } catch {
+    const pool = defaultModelPool();
+    fs.writeFileSync(MODEL_POOL_PATH, JSON.stringify(pool, null, 2));
+    return pool;
+  }
+}
+
+function writeModelPool(pool) {
+  fs.writeFileSync(MODEL_POOL_PATH, JSON.stringify(pool, null, 2));
+}
+
+function resetDailyCountsIfNeeded(pool) {
+  const today = new Date().toISOString().slice(0, 10);
+  for (const m of pool.models) {
+    if (m.lastResetDate !== today) {
+      m.usedToday = 0;
+      m.lastResetDate = today;
+    }
+  }
+}
+
+function selectModelForTask(pool, taskPriority) {
+  resetDailyCountsIfNeeded(pool);
+  const strategy = pool.scheduler.strategy || "cost-optimized";
+  const eligible = pool.models.filter(
+    (m) =>
+      m.enabled &&
+      m.usedToday < m.dailyLimit &&
+      taskPriority >= m.minTaskPriority &&
+      taskPriority <= m.maxTaskPriority
+  );
+  if (eligible.length === 0) return null;
+
+  if (strategy === "cost-optimized") {
+    // For high-priority tasks (1-3), use the best available (lowest priority number)
+    // For low-priority tasks (7-10), use cheapest available
+    // For mid-priority (4-6), balance between quality and cost
+    if (taskPriority <= 3) {
+      eligible.sort((a, b) => a.priority - b.priority);
+    } else if (taskPriority >= 7) {
+      eligible.sort((a, b) => a.costPer1kTokens - b.costPer1kTokens || b.priority - a.priority);
+    } else {
+      eligible.sort((a, b) => {
+        const scoreA = a.costPer1kTokens * 0.5 + a.priority * 0.5;
+        const scoreB = b.costPer1kTokens * 0.5 + b.priority * 0.5;
+        return scoreA - scoreB;
+      });
+    }
+  } else if (strategy === "round-robin") {
+    eligible.sort((a, b) => a.usedToday - b.usedToday);
+  } else if (strategy === "quality-first") {
+    eligible.sort((a, b) => a.priority - b.priority);
+  } else {
+    // cheapest-first
+    eligible.sort((a, b) => a.costPer1kTokens - b.costPer1kTokens);
+  }
+  return eligible[0];
+}
+
+// ── Auto-scheduler background loop ─────────────────────────────────────
+
+let schedulerTimer = null;
+let schedulerRunning = false;
+
+function isInPauseWindow(scheduler) {
+  if (!scheduler.pauseStart || !scheduler.pauseEnd) return false;
+  try {
+    const tz = scheduler.timezone || "America/Chicago";
+    const now = new Date();
+    const fmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false });
+    const nowTime = fmt.format(now);
+    const [h, m] = nowTime.split(":").map(Number);
+    const nowMins = h * 60 + m;
+    const [sh, sm] = scheduler.pauseStart.split(":").map(Number);
+    const [eh, em] = scheduler.pauseEnd.split(":").map(Number);
+    const startMins = sh * 60 + sm;
+    const endMins = eh * 60 + em;
+    if (startMins <= endMins) return nowMins >= startMins && nowMins < endMins;
+    return nowMins >= startMins || nowMins < endMins; // crosses midnight
+  } catch { return false; }
+}
+
+async function schedulerTick() {
+  if (schedulerRunning) return;
+  schedulerRunning = true;
+
+  try {
+    const queue = readTaskQueue();
+    const pool = readModelPool();
+    const sched = pool.scheduler;
+
+    if (!sched.enabled || queue.config.paused) { schedulerRunning = false; return; }
+    if (isInPauseWindow(sched)) { schedulerRunning = false; return; }
+
+    // Check daily task limit
+    const today = new Date().toISOString().slice(0, 10);
+    const tasksToday = queue.history.filter(
+      (t) => t.completedAt && t.completedAt.startsWith(today)
+    ).length;
+    if (tasksToday >= queue.config.dailyTaskLimit) { schedulerRunning = false; return; }
+
+    // Count currently running tasks
+    const running = queue.tasks.filter((t) => t.status === "running").length;
+    if (running >= (sched.maxConcurrent || 1)) { schedulerRunning = false; return; }
+
+    // Get next pending task (sorted by priority, lowest number = highest priority)
+    const pending = queue.tasks
+      .filter((t) => t.status === "pending")
+      .sort((a, b) => (a.priority || 5) - (b.priority || 5));
+
+    if (pending.length === 0) { schedulerRunning = false; return; }
+
+    const task = pending[0];
+    const taskPriority = task.priority || 5;
+
+    // Select model
+    const model = selectModelForTask(pool, taskPriority);
+    if (!model) {
+      console.log(`[scheduler] No available model for task ${task.id} (priority ${taskPriority})`);
+      schedulerRunning = false;
+      return;
+    }
+
+    console.log(`[scheduler] Assigning task "${task.title}" to model ${model.id} (priority ${taskPriority}, cost $${model.costPer1kTokens}/1k)`);
+
+    // Mark task as running
+    task.status = "running";
+    task.startedAt = new Date().toISOString();
+    task.assignedModel = model.id;
+    writeTaskQueue(queue);
+
+    // Increment model usage
+    model.usedToday++;
+    writeModelPool(pool);
+
+    appendActivity("scheduler_dispatch", {
+      id: task.id,
+      title: task.title,
+      model: model.id,
+      strategy: sched.strategy,
+      priority: taskPriority,
+    });
+
+    // Switch model before running
+    const currentModel = queue.config.engines?.openclaw?.model;
+    let switched = false;
+    if (currentModel !== model.id) {
+      const switchRes = await runCmd(OPENCLAW_NODE, clawArgs(["models", "set", model.id]));
+      switched = switchRes.code === 0;
+      if (!switched) console.warn(`[scheduler] Failed to switch to ${model.id}, using current model`);
+    }
+
+    // Execute
+    const timeout = queue.config.engines?.openclaw?.timeout || 180;
+    const projectPath = task.project ? task.project.split("/").pop() : "";
+    const prompt = [
+      task.title,
+      task.description ? `\nDetails: ${task.description}` : "",
+      projectPath ? `\nWork in the ${projectPath} project directory.` : "",
+    ].join("");
+
+    const agentArgs = [
+      "agent", "--session-id", `sched-${task.id.slice(0, 8)}`,
+      "--message", prompt,
+      "--timeout", String(timeout),
+    ];
+
+    runCmd(OPENCLAW_NODE, clawArgs(agentArgs)).then((r) => {
+      const q2 = readTaskQueue();
+      const t2 = q2.tasks.find((t) => t.id === task.id);
+      if (t2) {
+        t2.status = r.code === 0 ? "completed" : "failed";
+        t2.completedAt = new Date().toISOString();
+        t2.result = (r.output || "").slice(-2000);
+        t2.executedModel = model.id;
+        q2.tasks = q2.tasks.filter((t) => t.id !== task.id);
+        q2.history.push(t2);
+        if (q2.history.length > 500) q2.history = q2.history.slice(-500);
+        writeTaskQueue(q2);
+        appendActivity("scheduler_completed", {
+          id: t2.id, title: t2.title, model: model.id,
+          status: t2.status, exit: r.code,
+        });
+      }
+      // Restore original model if we switched
+      if (switched && currentModel) {
+        runCmd(OPENCLAW_NODE, clawArgs(["models", "set", currentModel])).catch(() => {});
+      }
+    }).catch((err) => {
+      const q2 = readTaskQueue();
+      const t2 = q2.tasks.find((t) => t.id === task.id);
+      if (t2) {
+        t2.status = "failed";
+        t2.completedAt = new Date().toISOString();
+        t2.result = err.message;
+        t2.executedModel = model.id;
+        q2.tasks = q2.tasks.filter((t) => t.id !== task.id);
+        q2.history.push(t2);
+        if (q2.history.length > 500) q2.history = q2.history.slice(-500);
+        writeTaskQueue(q2);
+        appendActivity("scheduler_failed", { id: t2.id, title: t2.title, model: model.id, error: err.message });
+      }
+      if (switched && currentModel) {
+        runCmd(OPENCLAW_NODE, clawArgs(["models", "set", currentModel])).catch(() => {});
+      }
+    });
+  } catch (err) {
+    console.error("[scheduler] tick error:", err.message);
+  } finally {
+    schedulerRunning = false;
+  }
+}
+
+function startScheduler() {
+  const pool = readModelPool();
+  if (!pool.scheduler.enabled) {
+    console.log("[scheduler] Disabled, not starting");
+    return;
+  }
+  const interval = (pool.scheduler.intervalSeconds || 600) * 1000;
+  console.log(`[scheduler] Starting with ${interval / 1000}s interval, strategy: ${pool.scheduler.strategy}`);
+  stopScheduler();
+  schedulerTimer = setInterval(schedulerTick, interval);
+  // Run first tick after 30s delay (let gateway warm up)
+  setTimeout(schedulerTick, 30000);
+}
+
+function stopScheduler() {
+  if (schedulerTimer) { clearInterval(schedulerTimer); schedulerTimer = null; }
+}
+
+function restartScheduler() {
+  stopScheduler();
+  startScheduler();
+}
+
 // ── Activity Log ─────────────────────────────────────────────────────────
 const ACTIVITY_LOG_PATH = path.join(STATE_DIR, "activity-log.json");
 const ACTIVITY_LOG_MAX = 500;
@@ -1471,6 +1802,99 @@ app.post("/setup/api/runner/pause", requireSetupAuth, (req, res) => {
   return res.json({ ok: true, paused: queue.config.paused });
 });
 
+// ── Model Pool & Scheduler API ──────────────────────────────────────────
+
+app.get("/setup/api/scheduler/pool", requireSetupAuth, (_req, res) => {
+  const pool = readModelPool();
+  resetDailyCountsIfNeeded(pool);
+  writeModelPool(pool);
+  return res.json({ ok: true, ...pool, schedulerActive: !!schedulerTimer });
+});
+
+app.post("/setup/api/scheduler/pool", requireSetupAuth, (req, res) => {
+  const { models, scheduler } = req.body || {};
+  const pool = readModelPool();
+  if (Array.isArray(models)) {
+    pool.models = models.filter((m) => m && typeof m.id === "string").slice(0, 20).map((m) => ({
+      id: String(m.id).slice(0, 100),
+      provider: String(m.provider || "").slice(0, 50),
+      tier: String(m.tier || "standard").slice(0, 20),
+      costPer1kTokens: Math.max(0, Number(m.costPer1kTokens) || 0),
+      dailyLimit: Math.max(1, Math.min(200, Number(m.dailyLimit) || 20)),
+      usedToday: Math.max(0, Number(m.usedToday) || 0),
+      lastResetDate: m.lastResetDate || "",
+      enabled: m.enabled !== false,
+      priority: Math.max(1, Math.min(20, Number(m.priority) || 5)),
+      minTaskPriority: Math.max(1, Math.min(10, Number(m.minTaskPriority) || 1)),
+      maxTaskPriority: Math.max(1, Math.min(10, Number(m.maxTaskPriority) || 10)),
+      capabilities: Array.isArray(m.capabilities) ? m.capabilities.filter((c) => typeof c === "string").slice(0, 10) : [],
+    }));
+  }
+  if (scheduler && typeof scheduler === "object") {
+    const s = pool.scheduler;
+    if (typeof scheduler.enabled === "boolean") s.enabled = scheduler.enabled;
+    if (typeof scheduler.intervalSeconds === "number") s.intervalSeconds = Math.max(60, Math.min(86400, scheduler.intervalSeconds));
+    if (typeof scheduler.strategy === "string") s.strategy = ["cost-optimized", "round-robin", "quality-first", "cheapest-first"].includes(scheduler.strategy) ? scheduler.strategy : s.strategy;
+    if (typeof scheduler.maxConcurrent === "number") s.maxConcurrent = Math.max(1, Math.min(5, scheduler.maxConcurrent));
+    if (typeof scheduler.pauseStart === "string") s.pauseStart = scheduler.pauseStart.slice(0, 5);
+    if (typeof scheduler.pauseEnd === "string") s.pauseEnd = scheduler.pauseEnd.slice(0, 5);
+    if (typeof scheduler.timezone === "string") s.timezone = scheduler.timezone.slice(0, 50);
+  }
+  writeModelPool(pool);
+  restartScheduler();
+  appendActivity("scheduler_config_updated", { modelsCount: pool.models.length, enabled: pool.scheduler.enabled, strategy: pool.scheduler.strategy });
+  return res.json({ ok: true, ...pool, schedulerActive: !!schedulerTimer });
+});
+
+app.post("/setup/api/scheduler/toggle", requireSetupAuth, (_req, res) => {
+  const pool = readModelPool();
+  pool.scheduler.enabled = !pool.scheduler.enabled;
+  writeModelPool(pool);
+  if (pool.scheduler.enabled) startScheduler(); else stopScheduler();
+  appendActivity("scheduler_toggled", { enabled: pool.scheduler.enabled });
+  return res.json({ ok: true, enabled: pool.scheduler.enabled, active: !!schedulerTimer });
+});
+
+app.post("/setup/api/scheduler/run-now", requireSetupAuth, async (_req, res) => {
+  if (schedulerRunning) return res.json({ ok: false, error: "Scheduler tick already in progress" });
+  schedulerTick();
+  return res.json({ ok: true, message: "Scheduler tick triggered" });
+});
+
+app.get("/setup/api/scheduler/status", requireSetupAuth, (_req, res) => {
+  const pool = readModelPool();
+  resetDailyCountsIfNeeded(pool);
+  const queue = readTaskQueue();
+  const today = new Date().toISOString().slice(0, 10);
+  const tasksToday = queue.history.filter((t) => t.completedAt && t.completedAt.startsWith(today)).length;
+  const running = queue.tasks.filter((t) => t.status === "running").length;
+  const pending = queue.tasks.filter((t) => t.status === "pending").length;
+
+  return res.json({
+    ok: true,
+    enabled: pool.scheduler.enabled,
+    active: !!schedulerTimer,
+    running: schedulerRunning,
+    strategy: pool.scheduler.strategy,
+    interval: pool.scheduler.intervalSeconds,
+    inPauseWindow: isInPauseWindow(pool.scheduler),
+    tasksToday,
+    dailyLimit: queue.config.dailyTaskLimit,
+    runningTasks: running,
+    pendingTasks: pending,
+    maxConcurrent: pool.scheduler.maxConcurrent,
+    models: pool.models.map((m) => ({
+      id: m.id,
+      tier: m.tier,
+      enabled: m.enabled,
+      usedToday: m.usedToday,
+      dailyLimit: m.dailyLimit,
+      remaining: m.dailyLimit - m.usedToday,
+      costPer1kTokens: m.costPer1kTokens,
+    })),
+  });
+});
+
 // ── Activity Log API ────────────────────────────────────────────────────
 
 app.get("/setup/api/activity", requireSetupAuth, (req, res) => {
@@ -2395,6 +2819,8 @@ const server = app.listen(PORT, () => {
         console.warn(`[wrapper] doctor --fix failed: ${err.message}`);
       }
       await ensureGatewayRunning();
+      // Start auto-scheduler after gateway is ready
+      startScheduler();
     })().catch((err) => {
       console.error(`[wrapper] failed to start gateway at boot: ${err.message}`);
     });
@@ -2467,6 +2893,7 @@ proxy.on("open", (proxySocket) => {
 async function gracefulShutdown(signal) {
   console.log(`[wrapper] received ${signal}, shutting down`);
   shuttingDown = true;
+  stopScheduler();
 
   if (setupRateLimiter.cleanupInterval) {
     clearInterval(setupRateLimiter.cleanupInterval);
