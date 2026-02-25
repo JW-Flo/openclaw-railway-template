@@ -1082,7 +1082,7 @@ app.get("/setup/api/skills/check", requireSetupAuth, async (_req, res) => {
   return res.json({ ok: r.code === 0, output: r.output });
 });
 
-const SKILL_NAME_RE = /^[a-zA-Z0-9_@/.:-]+$/;
+const SKILL_NAME_RE = /^[a-zA-Z0-9@][a-zA-Z0-9_@/.:-]*$/;
 
 app.post("/setup/api/skills/install", requireSetupAuth, async (req, res) => {
   const { source, force } = req.body || {};
@@ -1118,7 +1118,7 @@ app.post("/setup/api/skills/search", requireSetupAuth, async (req, res) => {
     return res.status(400).json({ ok: false, error: "Missing search query" });
   }
   const q = query.trim().substring(0, 200);
-  const words = q.split(/\s+/).filter(w => /^[a-zA-Z0-9_-]+$/.test(w));
+  const words = q.split(/\s+/).filter(w => /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(w));
   if (words.length === 0) {
     return res.status(400).json({ ok: false, error: "Invalid search query" });
   }
