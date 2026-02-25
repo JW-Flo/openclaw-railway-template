@@ -406,21 +406,21 @@ Follow this exact sequence for every PR. Do NOT skip the review step.
      "https://api.github.com/repos/JW-Flo/openclaw-railway-template/pulls/NUMBER/comments"
    ```
 7. **Fix findings**: Address all actionable review comments (security, bugs, docs). Acknowledged-risk items (e.g. architecture decisions) can be noted and skipped.
-8. **Push fixes**, then **re-request review** to validate:
+8. **Push fixes**, then **re-request review** via the reviewers API:
    ```bash
-   # Re-request via API or comment:
    curl -s -X POST -H "Authorization: token ${GH_PAT}" -H "Content-Type: application/json" \
-     "https://api.github.com/repos/JW-Flo/openclaw-railway-template/issues/NUMBER/comments" \
-     -d '{"body":"@copilot re-review — addressed findings."}'
+     "https://api.github.com/repos/JW-Flo/openclaw-railway-template/pulls/NUMBER/requested_reviewers" \
+     -d '{"reviewers":["Copilot"]}'
    ```
-9. **Verify clean**: Check new review has no new actionable findings
+   Note: Pushing new commits alone does not re-trigger Copilot. You must re-request via the API.
+9. **Verify clean**: Wait ~60s, re-fetch reviews/comments, confirm no new actionable findings
 10. **Squash merge**:
     ```bash
     curl -s -X PUT -H "Authorization: token ${GH_PAT}" -H "Content-Type: application/json" \
       "https://api.github.com/repos/JW-Flo/openclaw-railway-template/pulls/NUMBER/merge" \
       -d '{"merge_method":"squash"}'
     ```
-11. **Rebase feature branch**: `git fetch origin main && git reset --hard origin/main`
+11. **Reset feature branch** (squash merge diverges history): `git fetch origin main && git reset --hard origin/main`
 12. Railway **auto-deploys** from main (~60-90s for Docker build)
 
 ### Full Status Check (copy-paste)
