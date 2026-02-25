@@ -19,7 +19,7 @@
       style="max-height: {maxHeight};"
     >
       {#if content}
-        <span class="text-success">{content}</span>
+        <span class="text-text-2">{content}</span>
       {:else}
         <span class="text-text-3">No output</span>
       {/if}
