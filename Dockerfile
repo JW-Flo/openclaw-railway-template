@@ -8,9 +8,14 @@ RUN apt-get update \
     gosu \
     procps \
     python3 \
+    python3-pip \
     build-essential \
     jq \
+    ffmpeg \
   && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies for skills (e.g. web-search uses duckduckgo-search)
+RUN pip install --break-system-packages duckduckgo-search
 
 # Install GitHub CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -20,7 +25,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y gh && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g openclaw@latest wrangler@latest @railway/cli@latest
+RUN npm install -g openclaw@latest wrangler@latest @railway/cli@latest clawhub@latest
 
 WORKDIR /app
 
@@ -44,6 +49,23 @@ ENV HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
 ENV HOMEBREW_CELLAR="/home/linuxbrew/.linuxbrew/Cellar"
 ENV HOMEBREW_REPOSITORY="/home/linuxbrew/.linuxbrew/Homebrew"
 
+# Install skill dependencies via brew (uv for nano-banana-pro, himalaya for email)
+RUN brew install uv himalaya
+
+# Create npx wrapper scripts for skill CLIs not available via brew/apt
+RUN mkdir -p /home/openclaw/.local/bin \
+  && for cmd in clawhub summarize mcporter xurl obsidian-cli oracle gemini; do \
+       case "$cmd" in \
+         gemini) pkg="@google/gemini-cli" ;; \
+         *) pkg="$cmd" ;; \
+       esac; \
+       printf '#!/bin/sh\nexec npx %s@latest "$@"\n' "$pkg" > "/home/openclaw/.local/bin/$cmd"; \
+       chmod +x "/home/openclaw/.local/bin/$cmd"; \
+     done \
+  && printf '#!/bin/sh\nexec npx @anthropic-ai/claude-code@latest "$@"\n' > /home/openclaw/.local/bin/claude \
+  && chmod +x /home/openclaw/.local/bin/claude
+
+ENV PATH="/home/openclaw/.local/bin:${PATH}"
 ENV PORT=8080
 ENV OPENCLAW_ENTRY=/usr/local/lib/node_modules/openclaw/dist/entry.js
 EXPOSE 8080

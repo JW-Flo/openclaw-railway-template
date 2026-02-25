@@ -251,6 +251,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
   <div class="tab active" data-tab="overview">Overview</div>
   <div class="tab" data-tab="projects">Projects</div>
   <div class="tab" data-tab="models">Models</div>
+  <div class="tab" data-tab="skills">Skills</div>
   <div class="tab" data-tab="tools">Tools</div>
 </div>
 
@@ -327,6 +328,46 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
       <div id="models-list" style="padding:12px;font-family:var(--mono);font-size:12px;color:var(--text2);max-height:400px;overflow-y:auto;white-space:pre-wrap;">Loading...</div>
     </div>
     <div class="output" id="models-output"></div>
+  </div>
+
+  <!-- Skills Tab -->
+  <div class="panel" id="panel-skills">
+    <div class="actions">
+      <button class="btn primary" id="btn-refresh-skills">Refresh Skills</button>
+    </div>
+    <div class="table-wrap">
+      <h3>Installed Skills</h3>
+      <table>
+        <thead><tr><th>Skill</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody id="skills-tbody">
+          <tr class="loading-row"><td colspan="3"><span class="spinner"></span> Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="table-wrap" style="margin-top:24px">
+      <h3>Install from ClawHub</h3>
+      <div style="padding:12px">
+        <div class="form-group">
+          <label>Search ClawHub</label>
+          <div style="display:flex;gap:8px;">
+            <input type="text" id="skills-search-input" placeholder="e.g. web-search, git, docker, memory">
+            <button class="btn" id="btn-search-skills">Search</button>
+          </div>
+        </div>
+        <div id="skills-search-results" style="font-family:var(--mono);font-size:12px;color:var(--text2);max-height:300px;overflow-y:auto;white-space:pre-wrap;display:none;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;border:1px solid var(--border);"></div>
+        <div class="form-group" style="margin-top:12px">
+          <label>Install Skill (ClawHub slug, or github:user/repo)</label>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="text" id="skills-install-input" placeholder="e.g. skill-name or github:user/skill-repo">
+            <label style="font-size:12px;color:var(--text2);white-space:nowrap;display:flex;align-items:center;gap:4px;cursor:pointer">
+              <input type="checkbox" id="skills-install-force"> Force
+            </label>
+            <button class="btn primary" id="btn-install-skill">Install</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="output" id="skills-output"></div>
   </div>
 
   <!-- Tools Tab -->
@@ -500,6 +541,118 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     }
   });
 
+  // --- Skills ---
+  async function loadSkills() {
+    const tbody = document.getElementById("skills-tbody");
+    tbody.innerHTML = '<tr class="loading-row"><td colspan="3"><span class="spinner"></span> Loading...</td></tr>';
+    try {
+      const data = await api("GET", "/setup/api/skills/list");
+      const output = data.output || "";
+      // Parse table rows from openclaw skills list output
+      // Format: "│ ✓ ready  │ name │ description │ source │"
+      const lines = output.split("\n").filter(l => l.includes("│") && !l.includes("──") && !l.includes("Status"));
+      if (lines.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--text2);padding:24px">No skills found. Install skills from ClawHub below.</td></tr>';
+        return;
+      }
+      function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+      let rows = "";
+      const seen = new Set();
+      for (const line of lines) {
+        const cells = line.split("│").map(c => c.trim()).filter(Boolean);
+        if (cells.length < 3) continue;
+        const status = cells[0];
+        // Extract skill name (strip emoji prefix)
+        const rawName = cells[1].replace(/^[\s\S]{1,4}\s+/, "").trim();
+        if (!rawName || seen.has(rawName)) continue;
+        seen.add(rawName);
+        const safeName = esc(rawName);
+        const isReady = status.includes("ready");
+        const source = cells[3] || "";
+        const isWorkspace = source.includes("workspace");
+        const statusHtml = isReady
+          ? dot("green") + " Ready"
+          : dot("red") + " Missing";
+        const actionBtn = isWorkspace
+          ? '<button class="btn" onclick="uninstallSkill(\'' + safeName + '\')" style="padding:4px 10px;font-size:12px">Uninstall</button>'
+          : '<span style="color:var(--text2);font-size:11px">bundled</span>';
+        rows += '<tr>' +
+          '<td style="font-weight:600;font-family:var(--mono);font-size:12px">' + safeName + '</td>' +
+          '<td>' + statusHtml + '</td>' +
+          '<td>' + actionBtn + '</td></tr>';
+      }
+      if (!rows) {
+        tbody.innerHTML = "";
+        const cell = document.createElement("td");
+        cell.colSpan = 3;
+        cell.style.cssText = "font-family:var(--mono);font-size:12px;white-space:pre-wrap;padding:12px";
+        cell.textContent = output;
+        const tr = document.createElement("tr");
+        tr.appendChild(cell);
+        tbody.appendChild(tr);
+      } else {
+        tbody.innerHTML = rows;
+      }
+    } catch (err) {
+      tbody.innerHTML = "";
+      const cell = document.createElement("td");
+      cell.colSpan = 3;
+      cell.style.cssText = "color:var(--red);padding:12px";
+      cell.textContent = "Error loading skills: " + err.message;
+      const tr = document.createElement("tr");
+      tr.appendChild(cell);
+      tbody.appendChild(tr);
+    }
+  }
+
+  window.uninstallSkill = async function(name) {
+    const out = document.getElementById("skills-output");
+    out.classList.add("visible");
+    out.textContent = "Uninstalling " + name + "...\n";
+    try {
+      const data = await api("POST", "/setup/api/skills/uninstall", { name });
+      out.textContent += data.output || JSON.stringify(data, null, 2);
+      await loadSkills();
+    } catch (err) {
+      out.textContent += "Error: " + err.message;
+    }
+  };
+
+  document.getElementById("btn-refresh-skills").addEventListener("click", loadSkills);
+
+  document.getElementById("btn-search-skills").addEventListener("click", async () => {
+    const input = document.getElementById("skills-search-input");
+    const results = document.getElementById("skills-search-results");
+    const query = input.value.trim();
+    if (!query) return;
+    results.style.display = "block";
+    results.textContent = "Searching ClawHub for \"" + query + "\"...\n";
+    try {
+      const data = await api("POST", "/setup/api/skills/search", { query });
+      results.textContent = data.output || "(no results)";
+    } catch (err) {
+      results.textContent = "Error: " + err.message;
+    }
+  });
+
+  document.getElementById("btn-install-skill").addEventListener("click", async () => {
+    const input = document.getElementById("skills-install-input");
+    const forceCheckbox = document.getElementById("skills-install-force");
+    const out = document.getElementById("skills-output");
+    const source = input.value.trim();
+    if (!source) return;
+    const force = forceCheckbox.checked;
+    out.classList.add("visible");
+    out.textContent = "Installing " + source + (force ? " (force)" : "") + "...\n";
+    try {
+      const data = await api("POST", "/setup/api/skills/install", { source, force });
+      out.textContent += data.output || JSON.stringify(data, null, 2);
+      await loadSkills();
+    } catch (err) {
+      out.textContent += "Error: " + err.message;
+    }
+  });
+
   // --- Tools ---
   async function loadTools() {
     const tools = [
@@ -549,6 +702,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
   loadOverview();
   loadProjects();
   loadModels();
+  loadSkills();
   loadTools();
 })();
 </script>

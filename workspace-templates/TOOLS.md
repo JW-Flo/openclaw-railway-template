@@ -18,6 +18,51 @@
 - `TELEGRAM_API_HASH` — Telegram API hash
 - `GROK_API_KEY` — Grok API key
 
+## Skills (OpenClaw Agent Skills)
+
+Skills extend the agent's capabilities with specialized behaviors. They are loaded from SKILL.md files and injected into the system prompt.
+
+### Skill Locations (highest to lowest precedence)
+1. **Workspace skills**: `/data/workspace/skills/` — per-agent, highest priority
+2. **Managed skills**: `~/.openclaw/skills/` — shared across workspaces
+3. **Bundled skills**: shipped with OpenClaw installation
+
+### Managing Skills
+```bash
+# List all available skills
+openclaw skills list
+# List only eligible (runnable) skills
+openclaw skills list --eligible
+# Check skill requirements
+openclaw skills check
+# Get info about a skill
+openclaw skills info <skill-name>
+# Install from GitHub
+openclaw skills install github:user/skill-name
+```
+
+### ClawHub (Skills Marketplace)
+```bash
+# Search for skills
+clawhub search <query>
+# Install a skill from ClawHub
+clawhub install <slug>
+# List installed ClawHub skills
+clawhub list
+# Update all installed skills
+clawhub update --all
+```
+
+### Creating Custom Skills
+Place a directory in `/data/workspace/skills/<skill-name>/` with a `SKILL.md` file:
+```yaml
+---
+name: my-skill
+description: What the skill does
+---
+Instructions for the agent when this skill is active...
+```
+
 ## Common Workflows
 
 ### Check project health

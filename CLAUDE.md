@@ -197,7 +197,7 @@ Edit `buildOnboardArgs()` (src/server.js:442-496) to add new CLI flags or auth p
 
 ### Installed CLI Tools
 
-`gh`, `git`, `node`, `npm`, `jq`, `wrangler`, `railway`
+`gh`, `git`, `node`, `npm`, `jq`, `wrangler`, `railway`, `clawhub`
 
 ## Orchestrator Management (from Claude Code sessions)
 
@@ -230,6 +230,32 @@ curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/js
 ```
 
 Valid `authChoice` values: `apiKey` (Anthropic), `openrouter-api-key`, `openai-api-key`, `gemini-api-key`, etc.
+
+### Skills Management
+
+```bash
+# List all skills (bundled + workspace + managed)
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/skills/list
+# List only eligible skills
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/skills/eligible
+# Check skill requirements
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/skills/check
+# Install from ClawHub (use force:true for VirusTotal-flagged skills after vetting)
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/skills/install -d '{"source":"clawhub-slug"}'
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/skills/install -d '{"source":"clawhub-slug","force":true}'
+# Uninstall a workspace skill
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/skills/uninstall -d '{"name":"skill-name"}'
+# Search ClawHub
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/skills/search -d '{"query":"web search"}'
+# Get info about a skill
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/skills/info/skill-name
+```
+
+**Note**: Skills auto-load when their requirements are met (no explicit enable/disable). Skills are snapshotted when a session starts — changes take effect on the next new session. The dashboard has a Skills tab for visual management.
 
 ### Model Management
 
