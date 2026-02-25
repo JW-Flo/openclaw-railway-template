@@ -387,6 +387,8 @@ curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/js
 
 Follow this exact sequence for every PR. Do NOT skip the review step.
 
+**Important**: The `gh` CLI may not be available in all environments. Always use the GitHub REST API via `curl` with `$GH_PAT` as shown below. If `gh` is installed and working, you may use it, but the `curl` approach is the canonical fallback and is always reliable.
+
 1. **Develop** on a feature branch (`claude/<description>-<sessionId>`)
 2. **Lint**: `npm run lint` to verify syntax
 3. **Commit & push**: Commit with descriptive message, `git push -u origin <branch>`
@@ -467,3 +469,5 @@ echo -e "\n=== Credentials ===" && curl -s -X POST -H "Authorization: Basic $AUT
 14. **Claude Max cannot be used with OpenClaw** → Anthropic blocked third-party OAuth access (Jan 2026). Only standard API keys from `console.anthropic.com` work. Max subscriptions are for claude.ai and Claude Code only.
 15. **OpenClaw cron jobs use `--system-event` for main session** → `--message` only works with `--session isolated`. Main session jobs require `--system-event`. Manage via `openclaw cron list/add/rm/run`.
 16. **Both API providers need credits** → Check OpenRouter balance at `openrouter.ai/settings/credits` and Anthropic balance at `console.anthropic.com`. OpenClaw auto-disables profiles with billing errors (with backoff); reset via editing `auth-profiles.json`.
+17. **`gh` CLI may not be available** → In Claude Code sessions or CI environments, `gh` may not be installed. Always prefer the GitHub REST API via `curl -H "Authorization: token ${GH_PAT}"` for PR creation, review requests, merging, and issue management. The `gh` CLI is installed on the Railway instance but not guaranteed in development environments.
+18. **External API tokens** → API tokens created via `/setup/api/tokens/create` use `jclaw_` prefix and Bearer auth. Tokens are stored in `${STATE_DIR}/api-tokens.json`. External endpoints are at `/api/v1/*` (health, status, agent/message, tasks/add, tasks).

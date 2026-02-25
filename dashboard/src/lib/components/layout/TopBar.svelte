@@ -1,7 +1,7 @@
 <script>
   import { page } from '$app/stores';
   import { base } from '$app/paths';
-  import { health } from '$lib/stores/health.js';
+  import { health, connection } from '$lib/stores/health.js';
   import { api } from '$lib/api/client.js';
   import { success, error as notifyError } from '$lib/stores/notifications.js';
   import Button from '$lib/components/shared/Button.svelte';
@@ -24,6 +24,7 @@
       sessions: 'Sessions',
       reports: 'Reports',
       runner: 'Runner',
+      settings: 'Settings',
     };
     return labels[segment] || segment.charAt(0).toUpperCase() + segment.slice(1);
   });
@@ -34,7 +35,16 @@
     : 'red'
   );
 
-  let gatewayRunning = $derived($health?.gateway === 'running');
+  let isConnected = $derived($connection?.connected || false);
+  let gatewayAlive = $derived($connection?.gateway || false);
+
+  function formatUptime(seconds) {
+    if (!seconds) return '--';
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+    return `${Math.floor(seconds / 86400)}d ${Math.floor((seconds % 86400) / 3600)}h`;
+  }
 
   async function restartGateway() {
     restartLoading = true;
@@ -61,10 +71,9 @@
   }
 </script>
 
-<header class="sticky top-0 h-14 bg-surface/80 backdrop-blur-md border-b border-border px-6 flex items-center justify-between z-20">
+<header class="sticky top-0 h-14 bg-surface/80 backdrop-blur-md border-b border-border px-4 sm:px-6 flex items-center justify-between z-20">
   <!-- Left side: hamburger + breadcrumb -->
   <div class="flex items-center gap-3">
-    <!-- Mobile hamburger -->
     <button
       class="md:hidden p-1.5 -ml-1.5 rounded-lg text-text-2 hover:text-text hover:bg-surface-2 transition-colors duration-150 cursor-pointer"
       onclick={onToggleSidebar}
@@ -75,7 +84,6 @@
       </svg>
     </button>
 
-    <!-- Breadcrumb -->
     <nav class="flex items-center gap-1.5 text-sm">
       <span class="text-text-3">Dashboard</span>
       <svg class="w-3.5 h-3.5 text-text-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -85,23 +93,37 @@
     </nav>
   </div>
 
-  <!-- Right side: status + actions -->
-  <div class="flex items-center gap-3">
-    <!-- Gateway status dot -->
-    <div class="flex items-center gap-2 text-xs text-text-3 mr-1">
+  <!-- Right side: connection + status + actions -->
+  <div class="flex items-center gap-2 sm:gap-3">
+    <!-- Connection indicator -->
+    <div class="flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-lg {isConnected ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}">
       <span
-        class="w-2 h-2 rounded-full flex-shrink-0"
+        class="w-1.5 h-1.5 rounded-full flex-shrink-0 {isConnected ? 'bg-success' : 'bg-danger'}"
+        class:status-pulse={isConnected}
+      ></span>
+      <span class="hidden sm:inline font-medium">
+        {isConnected ? 'Connected' : 'Disconnected'}
+      </span>
+    </div>
+
+    <!-- Gateway status -->
+    <div class="flex items-center gap-1.5 text-[11px] text-text-3 px-2 py-1 rounded-lg bg-surface-2/50">
+      <span
+        class="w-1.5 h-1.5 rounded-full flex-shrink-0"
         class:bg-success={gatewayStatus === 'green'}
         class:bg-warning={gatewayStatus === 'yellow'}
         class:bg-danger={gatewayStatus === 'red'}
         class:status-pulse={gatewayStatus === 'yellow'}
       ></span>
       <span class="hidden sm:inline">
-        {gatewayStatus === 'green' ? 'Running' : gatewayStatus === 'yellow' ? 'Starting' : 'Stopped'}
+        {gatewayStatus === 'green' ? 'Gateway' : gatewayStatus === 'yellow' ? 'Starting' : 'Stopped'}
       </span>
+      {#if $connection?.uptime}
+        <span class="hidden md:inline text-text-3 ml-0.5">{formatUptime($connection.uptime)}</span>
+      {/if}
     </div>
 
-    <!-- Restart Gateway button -->
+    <!-- Restart -->
     <Button variant="ghost" size="sm" loading={restartLoading} onclick={restartGateway}>
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
         <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
@@ -109,12 +131,12 @@
       <span class="hidden sm:inline">Restart</span>
     </Button>
 
-    <!-- Doctor button -->
+    <!-- Doctor -->
     <Button variant="ghost" size="sm" loading={doctorLoading} onclick={runDoctor}>
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
         <path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17l-5.71 5.71a2.121 2.121 0 01-3-3l5.71-5.71M17.5 6.5l-1.5 1.5m0 0l-3 3m3-3l3-3m-3 3l-3 3m9 1.5a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z" />
       </svg>
-      <span class="hidden sm:inline">Doctor</span>
+      <span class="hidden md:inline">Doctor</span>
     </Button>
   </div>
 </header>

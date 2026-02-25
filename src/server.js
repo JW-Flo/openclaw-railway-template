@@ -102,6 +102,25 @@ function readActivityLog(limit = 100) {
   } catch { return []; }
 }
 
+// ── API Token Management ────────────────────────────────────────────────
+const API_TOKENS_PATH = path.join(STATE_DIR, "api-tokens.json");
+
+function readApiTokens() {
+  try {
+    const data = JSON.parse(fs.readFileSync(API_TOKENS_PATH, "utf8"));
+    return Array.isArray(data) ? data : [];
+  } catch { return []; }
+}
+
+function writeApiTokens(tokens) {
+  fs.writeFileSync(API_TOKENS_PATH, JSON.stringify(tokens, null, 2));
+}
+
+function validateApiToken(token) {
+  const tokens = readApiTokens();
+  return tokens.find(t => t.token === token && !t.revoked);
+}
+
 let cachedOpenclawVersion = null;
 let cachedChannelsHelp = null;
 
@@ -1557,8 +1576,11 @@ app.post("/setup/api/runner/suggest", requireSetupAuth, async (req, res) => {
   const { project } = req.body || {};
   try {
     // Gather context: project status, recent history, workspace files
-    const projectsRes = await runCmd("sh", ["-c", `ls -1 "${WORKSPACE_DIR}" 2>/dev/null`], { cwd: WORKSPACE_DIR });
-    const projects = (projectsRes.output || "").split("\n").filter(Boolean).filter(d => !d.startsWith("."));
+    let projects = [];
+    try {
+      const entries = fs.readdirSync(WORKSPACE_DIR, { withFileTypes: true });
+      projects = entries.filter(e => e.isDirectory() && !e.name.startsWith(".")).map(e => e.name);
+    } catch { projects = []; }
 
     // Filter to requested project or all
     const targetProjects = project ? projects.filter(p => p === project || p === project.split("/").pop()) : projects;
@@ -1567,6 +1589,8 @@ app.post("/setup/api/runner/suggest", requireSetupAuth, async (req, res) => {
     const contextParts = [];
     for (const proj of targetProjects.slice(0, 6)) {
       const projDir = path.join(WORKSPACE_DIR, proj);
+      // Verify it's actually a directory before using as cwd
+      try { if (!fs.statSync(projDir).isDirectory()) continue; } catch { continue; }
       const parts = [`## Project: ${proj}`];
       // Read CLAUDE.md if exists
       try {
@@ -1580,8 +1604,10 @@ app.post("/setup/api/runner/suggest", requireSetupAuth, async (req, res) => {
       const gitSt = await runCmd("git", ["-C", projDir, "status", "--short"]);
       if (gitSt.code === 0 && gitSt.output.trim()) parts.push("Dirty files:\n" + gitSt.output.slice(0, 300));
       // Issues (if gh is available)
-      const issues = await runCmd("gh", ["issue", "list", "-R", `JW-Flo/${proj}`, "--limit", "5", "--json", "title,number,labels"], { cwd: projDir });
-      if (issues.code === 0 && issues.output.trim()) parts.push("Open issues: " + issues.output.slice(0, 500));
+      try {
+        const issues = await runCmd("gh", ["issue", "list", "-R", `JW-Flo/${proj}`, "--limit", "5", "--json", "title,number,labels"], { cwd: projDir });
+        if (issues.code === 0 && issues.output.trim()) parts.push("Open issues: " + issues.output.slice(0, 500));
+      } catch { /* gh not available or dir issue */ }
       contextParts.push(parts.join("\n"));
     }
 
@@ -1628,6 +1654,470 @@ app.post("/setup/api/runner/suggest", requireSetupAuth, async (req, res) => {
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// ── Chat API (SSE streaming) ────────────────────────────────────────────
+
+app.post("/setup/api/chat/send", requireSetupAuth, (req, res) => {
+  const { message, sessionId, model } = req.body || {};
+  if (!message || typeof message !== "string" || !message.trim()) {
+    return res.status(400).json({ ok: false, error: "Missing message" });
+  }
+  const sid = (typeof sessionId === "string" && sessionId.trim())
+    ? sessionId.trim().slice(0, 100)
+    : `chat-${Date.now()}`;
+
+  // Set up SSE
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+
+  const engineCfg = readTaskQueue().config.engines?.openclaw || {};
+  const timeout = engineCfg.timeout || 180;
+
+  const agentArgs = [
+    "agent", "--session-id", sid,
+    "--message", message.trim().slice(0, 10000),
+    "--timeout", String(timeout),
+  ];
+
+  const proc = childProcess.spawn(OPENCLAW_NODE, clawArgs(agentArgs), {
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: STATE_DIR,
+      OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
+    },
+  });
+
+  let fullOutput = "";
+
+  function sendSSE(event, data) {
+    try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* closed */ }
+  }
+
+  sendSSE("status", { status: "started", sessionId: sid });
+
+  proc.stdout?.on("data", (chunk) => {
+    const text = chunk.toString("utf8");
+    fullOutput += text;
+    sendSSE("chunk", { text });
+  });
+
+  proc.stderr?.on("data", (chunk) => {
+    const text = chunk.toString("utf8");
+    fullOutput += text;
+    sendSSE("chunk", { text });
+  });
+
+  proc.on("close", (code) => {
+    sendSSE("done", { code, output: fullOutput.slice(-5000) });
+    appendActivity("chat_message", { sessionId: sid, length: message.length });
+    try { res.end(); } catch { /* already closed */ }
+  });
+
+  proc.on("error", (err) => {
+    sendSSE("error", { message: err.message });
+    try { res.end(); } catch { /* already closed */ }
+  });
+
+  // If client disconnects, kill the process
+  req.on("close", () => {
+    try { proc.kill("SIGTERM"); } catch { /* already exited */ }
+  });
+});
+
+// Get chat session history (list available sessions)
+app.get("/setup/api/chat/sessions", requireSetupAuth, async (_req, res) => {
+  try {
+    const r = await runCmd(OPENCLAW_NODE, clawArgs(["sessions", "--json"]));
+    const output = (r.output || "").trim();
+    let sessions = [];
+    if (output) {
+      try {
+        const parsed = JSON.parse(output);
+        sessions = Array.isArray(parsed) ? parsed : (parsed.sessions || parsed.data || []);
+      } catch { /* not parseable */ }
+    }
+    return res.json({ ok: true, sessions });
+  } catch {
+    return res.json({ ok: true, sessions: [] });
+  }
+});
+
+// ── Connection / Dashboard Status ───────────────────────────────────────
+
+app.get("/setup/api/connection", requireSetupAuth, async (_req, res) => {
+  const uptime = process.uptime();
+  const mem = process.memoryUsage();
+  let gatewayPing = false;
+  try {
+    const r = await fetch(`http://127.0.0.1:${process.env.INTERNAL_GATEWAY_PORT || 18789}/health`, { signal: AbortSignal.timeout(3000) });
+    gatewayPing = r.ok;
+  } catch { /* gateway not reachable */ }
+
+  return res.json({
+    ok: true,
+    connected: true,
+    gateway: gatewayPing,
+    uptime: Math.floor(uptime),
+    memory: Math.floor(mem.rss / 1024 / 1024),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Resume/send a message into an existing session (SSE streaming)
+app.post("/setup/api/sessions/resume", requireSetupAuth, (req, res) => {
+  const { sessionId, message } = req.body || {};
+  if (!sessionId || typeof sessionId !== "string") {
+    return res.status(400).json({ ok: false, error: "Missing sessionId" });
+  }
+  if (!message || typeof message !== "string" || !message.trim()) {
+    return res.status(400).json({ ok: false, error: "Missing message" });
+  }
+
+  // SSE streaming
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+
+  const engineCfg = readTaskQueue().config.engines?.openclaw || {};
+  const timeout = engineCfg.timeout || 180;
+
+  const agentArgs = [
+    "agent", "--session-id", sessionId.trim().slice(0, 100),
+    "--message", message.trim().slice(0, 10000),
+    "--timeout", String(timeout),
+  ];
+
+  const proc = childProcess.spawn(OPENCLAW_NODE, clawArgs(agentArgs), {
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: STATE_DIR,
+      OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
+    },
+  });
+
+  let fullOutput = "";
+
+  function sendSSE(event, data) {
+    try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* closed */ }
+  }
+
+  sendSSE("status", { status: "started", sessionId });
+
+  proc.stdout?.on("data", (chunk) => {
+    const text = chunk.toString("utf8");
+    fullOutput += text;
+    sendSSE("chunk", { text });
+  });
+
+  proc.stderr?.on("data", (chunk) => {
+    const text = chunk.toString("utf8");
+    fullOutput += text;
+    sendSSE("chunk", { text });
+  });
+
+  proc.on("close", (code) => {
+    sendSSE("done", { code, output: fullOutput.slice(-5000) });
+    appendActivity("session_message", { sessionId, length: message.length });
+    try { res.end(); } catch { /* already closed */ }
+  });
+
+  proc.on("error", (err) => {
+    sendSSE("error", { message: err.message });
+    try { res.end(); } catch { /* already closed */ }
+  });
+
+  req.on("close", () => {
+    try { proc.kill("SIGTERM"); } catch { /* already exited */ }
+  });
+});
+
+// ── News Ticker API ─────────────────────────────────────────────────────
+
+const TICKER_CONFIG_PATH = path.join(STATE_DIR, "ticker-config.json");
+
+function readTickerConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(TICKER_CONFIG_PATH, "utf8"));
+  } catch {
+    return {
+      enabled: true,
+      speed: 30,
+      sources: {
+        marketAgents: { enabled: true, label: "Market Data" },
+        manual: { enabled: true, items: [] },
+      },
+    };
+  }
+}
+
+function writeTickerConfig(config) {
+  fs.writeFileSync(TICKER_CONFIG_PATH, JSON.stringify(config, null, 2));
+}
+
+app.get("/setup/api/ticker/config", requireSetupAuth, (_req, res) => {
+  return res.json({ ok: true, config: readTickerConfig() });
+});
+
+app.post("/setup/api/ticker/config", requireSetupAuth, (req, res) => {
+  const config = readTickerConfig();
+  const { enabled, speed, sources } = req.body || {};
+  if (typeof enabled === "boolean") config.enabled = enabled;
+  if (typeof speed === "number" && speed >= 5 && speed <= 120) config.speed = speed;
+  if (sources && typeof sources === "object") {
+    if (sources.marketAgents && typeof sources.marketAgents === "object") {
+      config.sources.marketAgents = { ...config.sources.marketAgents, ...sources.marketAgents };
+    }
+    if (sources.manual && typeof sources.manual === "object") {
+      if (Array.isArray(sources.manual.items)) {
+        config.sources.manual.items = sources.manual.items
+          .filter(i => typeof i === "string")
+          .slice(0, 50)
+          .map(i => i.slice(0, 500));
+      }
+      if (typeof sources.manual.enabled === "boolean") config.sources.manual.enabled = sources.manual.enabled;
+    }
+  }
+  writeTickerConfig(config);
+  return res.json({ ok: true, config });
+});
+
+// ── Market Data Ticker ──────────────────────────────────────────────────
+
+app.get("/setup/api/market/ticker", requireSetupAuth, async (_req, res) => {
+  // Query market_agents SQLite database for recent data
+  const dbPath = path.join(WORKSPACE_DIR, "market_agents", "data", "market_agents.db");
+  const items = [];
+
+  try {
+    // Recent arb signals
+    const signals = await runCmd("sh", ["-c",
+      `sqlite3 -json "${dbPath}" "SELECT * FROM arb_signals ORDER BY rowid DESC LIMIT 10" 2>/dev/null || echo "[]"`
+    ]);
+    try {
+      const parsed = JSON.parse(signals.output || "[]");
+      for (const s of parsed.slice(0, 5)) {
+        items.push({
+          type: "signal",
+          text: `${s.event || s.market || "Signal"}: ${s.signal_type || s.direction || ""} ${s.edge ? `(edge: ${s.edge})` : ""}`.trim(),
+          ts: s.timestamp || s.created_at || new Date().toISOString(),
+          source: "market_agents",
+        });
+      }
+    } catch { /* skip */ }
+
+    // Recent fills/trades
+    const fills = await runCmd("sh", ["-c",
+      `sqlite3 -json "${dbPath}" "SELECT * FROM kalshi_fills ORDER BY rowid DESC LIMIT 10" 2>/dev/null || echo "[]"`
+    ]);
+    try {
+      const parsed = JSON.parse(fills.output || "[]");
+      for (const f of parsed.slice(0, 5)) {
+        const side = f.side || f.action || "";
+        const price = f.price || f.fill_price || "";
+        items.push({
+          type: "trade",
+          text: `${f.ticker || f.market || "Trade"}: ${side} @ ${price}`.trim(),
+          ts: f.created_time || f.timestamp || new Date().toISOString(),
+          source: "market_agents",
+        });
+      }
+    } catch { /* skip */ }
+
+    // Recent positions
+    const positions = await runCmd("sh", ["-c",
+      `sqlite3 -json "${dbPath}" "SELECT * FROM positions ORDER BY rowid DESC LIMIT 5" 2>/dev/null || echo "[]"`
+    ]);
+    try {
+      const parsed = JSON.parse(positions.output || "[]");
+      for (const p of parsed.slice(0, 3)) {
+        items.push({
+          type: "position",
+          text: `Position: ${p.ticker || p.market || "?"} ${p.side || ""} qty:${p.quantity || p.count || "?"}`.trim(),
+          ts: p.updated_at || p.created_at || new Date().toISOString(),
+          source: "market_agents",
+        });
+      }
+    } catch { /* skip */ }
+  } catch (err) {
+    // DB not found or sqlite3 not available — that's fine
+    console.warn("[market-ticker] query error:", err.message);
+  }
+
+  return res.json({ ok: true, items });
+});
+
+// ── API Token Management Endpoints ──────────────────────────────────────
+
+app.get("/setup/api/tokens", requireSetupAuth, (_req, res) => {
+  const tokens = readApiTokens();
+  // Return tokens but mask the actual token value
+  const masked = tokens.map(t => ({
+    ...t,
+    token: t.token.slice(0, 8) + "..." + t.token.slice(-4),
+    _fullToken: undefined,
+  }));
+  return res.json({ ok: true, tokens: masked });
+});
+
+app.post("/setup/api/tokens/create", requireSetupAuth, (req, res) => {
+  const { name, scopes } = req.body || {};
+  if (!name || typeof name !== "string" || !name.trim()) {
+    return res.status(400).json({ ok: false, error: "Missing token name" });
+  }
+  const token = `jclaw_${crypto.randomBytes(32).toString("hex")}`;
+  const tokenEntry = {
+    id: crypto.randomUUID(),
+    name: name.trim().slice(0, 100),
+    token,
+    scopes: Array.isArray(scopes) ? scopes.filter(s => typeof s === "string").slice(0, 20) : ["read", "write", "agent"],
+    createdAt: new Date().toISOString(),
+    lastUsed: null,
+    revoked: false,
+  };
+
+  const tokens = readApiTokens();
+  tokens.push(tokenEntry);
+  writeApiTokens(tokens);
+  appendActivity("token_created", { name: tokenEntry.name, id: tokenEntry.id });
+
+  // Return the full token ONCE (user must copy it now)
+  return res.json({ ok: true, token: tokenEntry });
+});
+
+app.post("/setup/api/tokens/revoke", requireSetupAuth, (req, res) => {
+  const { id } = req.body || {};
+  if (!id) return res.status(400).json({ ok: false, error: "Missing token id" });
+
+  const tokens = readApiTokens();
+  const token = tokens.find(t => t.id === id);
+  if (!token) return res.status(404).json({ ok: false, error: "Token not found" });
+
+  token.revoked = true;
+  token.revokedAt = new Date().toISOString();
+  writeApiTokens(tokens);
+  appendActivity("token_revoked", { name: token.name, id: token.id });
+
+  return res.json({ ok: true });
+});
+
+// ── External API (token-authenticated for local AI builds) ──────────────
+
+function requireApiToken(req, res, next) {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+
+  if (!token) {
+    return res.status(401).json({ ok: false, error: "Missing Bearer token" });
+  }
+
+  const entry = validateApiToken(token);
+  if (!entry) {
+    return res.status(403).json({ ok: false, error: "Invalid or revoked token" });
+  }
+
+  // Update last used
+  const tokens = readApiTokens();
+  const t = tokens.find(x => x.id === entry.id);
+  if (t) { t.lastUsed = new Date().toISOString(); writeApiTokens(tokens); }
+
+  req.apiToken = entry;
+  next();
+}
+
+// External API: health check
+app.get("/api/v1/health", requireApiToken, (_req, res) => {
+  return res.json({ ok: true, gateway: isGatewayReady(), version: cachedOpenclawVersion });
+});
+
+// External API: send message to agent
+app.post("/api/v1/agent/message", requireApiToken, (req, res) => {
+  const { message, sessionId, timeout } = req.body || {};
+  if (!message || typeof message !== "string") {
+    return res.status(400).json({ ok: false, error: "Missing message" });
+  }
+  const sid = (typeof sessionId === "string" && sessionId.trim()) ? sessionId.trim().slice(0, 100) : `api-${Date.now()}`;
+  const tout = Math.min(Math.max(Number(timeout) || 120, 10), 600);
+
+  // SSE streaming response
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+
+  const proc = childProcess.spawn(OPENCLAW_NODE, clawArgs([
+    "agent", "--session-id", sid,
+    "--message", message.trim().slice(0, 10000),
+    "--timeout", String(tout),
+  ]), {
+    env: { ...process.env, OPENCLAW_STATE_DIR: STATE_DIR, OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR },
+  });
+
+  let fullOutput = "";
+  function sendSSE(event, data) {
+    try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* closed */ }
+  }
+
+  sendSSE("status", { sessionId: sid });
+  proc.stdout?.on("data", (d) => { const t = d.toString("utf8"); fullOutput += t; sendSSE("chunk", { text: t }); });
+  proc.stderr?.on("data", (d) => { const t = d.toString("utf8"); fullOutput += t; sendSSE("chunk", { text: t }); });
+  proc.on("close", (code) => {
+    sendSSE("done", { code, output: fullOutput.slice(-5000) });
+    appendActivity("api_agent_message", { sessionId: sid, tokenName: req.apiToken.name });
+    try { res.end(); } catch { /* closed */ }
+  });
+  proc.on("error", (err) => { sendSSE("error", { message: err.message }); try { res.end(); } catch { /* closed */ } });
+  req.on("close", () => { try { proc.kill("SIGTERM"); } catch { /* exited */ } });
+});
+
+// External API: get status
+app.get("/api/v1/status", requireApiToken, async (_req, res) => {
+  const queue = readTaskQueue();
+  return res.json({
+    ok: true,
+    gateway: isGatewayReady(),
+    tasksQueued: queue.tasks.length,
+    tasksToday: queue.history.filter(t => t.completedAt && t.completedAt.startsWith(new Date().toISOString().slice(0, 10))).length,
+    paused: queue.config.paused,
+  });
+});
+
+// External API: add task
+app.post("/api/v1/tasks/add", requireApiToken, (req, res) => {
+  const { project, title, description, priority } = req.body || {};
+  if (!title || typeof title !== "string") {
+    return res.status(400).json({ ok: false, error: "Missing title" });
+  }
+  const queue = readTaskQueue();
+  const task = {
+    id: crypto.randomUUID(),
+    project: typeof project === "string" ? project.slice(0, 200) : null,
+    title: title.slice(0, 500),
+    description: typeof description === "string" ? description.slice(0, 5000) : "",
+    priority: Number.isInteger(priority) && priority >= 1 && priority <= 10 ? priority : 5,
+    status: "pending",
+    createdAt: new Date().toISOString(),
+    source: `api:${req.apiToken.name}`,
+  };
+  queue.tasks.push(task);
+  writeTaskQueue(queue);
+  appendActivity("task_added", { id: task.id, title: task.title, source: task.source });
+  return res.json({ ok: true, task });
+});
+
+// External API: list tasks
+app.get("/api/v1/tasks", requireApiToken, (_req, res) => {
+  const queue = readTaskQueue();
+  return res.json({ ok: true, tasks: queue.tasks, config: queue.config });
 });
 
 // Serve SvelteKit dashboard build output (static files)
