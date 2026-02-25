@@ -408,21 +408,42 @@ function restartScheduler() {
   startScheduler();
 }
 
-// ── Activity Log ─────────────────────────────────────────────────────────
+// ── Activity Log (with user attribution + filtering) ────────────────────
 const ACTIVITY_LOG_PATH = path.join(STATE_DIR, "activity-log.json");
-const ACTIVITY_LOG_MAX = 500;
+const ACTIVITY_LOG_MAX = 2000;
 
-function appendActivity(type, detail) {
+// SSE clients for real-time event streaming
+const sseClients = new Set();
+
+function broadcastSSE(event, data) {
+  const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of sseClients) {
+    try { client.write(msg); } catch { sseClients.delete(client); }
+  }
+}
+
+function appendActivity(type, detail, user) {
   let log = [];
   try {
     log = JSON.parse(fs.readFileSync(ACTIVITY_LOG_PATH, "utf8"));
     if (!Array.isArray(log)) log = [];
   } catch { log = []; }
-  log.push({ type, detail, ts: new Date().toISOString() });
+  const entry = {
+    id: crypto.randomUUID(),
+    type,
+    detail,
+    user: user ? { id: user.id, username: user.username, role: user.role } : null,
+    ts: new Date().toISOString(),
+  };
+  log.push(entry);
   if (log.length > ACTIVITY_LOG_MAX) log = log.slice(-ACTIVITY_LOG_MAX);
   try { fs.writeFileSync(ACTIVITY_LOG_PATH, JSON.stringify(log)); } catch (e) {
     console.warn("[activity-log] write error:", e.message);
   }
+  // Broadcast to SSE clients
+  broadcastSSE("activity", entry);
+  // Check alert rules
+  checkAlertRules(entry);
 }
 
 function readActivityLog(limit = 100) {
@@ -431,6 +452,84 @@ function readActivityLog(limit = 100) {
     if (!Array.isArray(log)) return [];
     return log.slice(-limit);
   } catch { return []; }
+}
+
+function filterActivityLog({ limit = 100, user, type, from, to, search }) {
+  let log = readActivityLog(ACTIVITY_LOG_MAX);
+  if (user) log = log.filter(e => e.user?.username === user || e.user?.id === user);
+  if (type) log = log.filter(e => e.type === type || e.type.includes(type));
+  if (from) log = log.filter(e => e.ts >= from);
+  if (to) log = log.filter(e => e.ts <= to);
+  if (search) {
+    const q = search.toLowerCase();
+    log = log.filter(e =>
+      e.type.toLowerCase().includes(q) ||
+      JSON.stringify(e.detail || {}).toLowerCase().includes(q) ||
+      (e.user?.username || "").toLowerCase().includes(q)
+    );
+  }
+  return log.slice(-limit);
+}
+
+// ── Alert System ────────────────────────────────────────────────────────
+const ALERT_CONFIG_PATH = path.join(STATE_DIR, "alert-config.json");
+
+function readAlertConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(ALERT_CONFIG_PATH, "utf8"));
+  } catch {
+    return {
+      telegram: { enabled: false, botToken: "", chatId: "" },
+      rules: [
+        { id: "gateway_down", type: "gateway_error", severity: "critical", enabled: true },
+        { id: "task_failed", type: "task_failed", severity: "warning", enabled: true },
+        { id: "quota_exceeded", type: "quota_exceeded", severity: "info", enabled: true },
+        { id: "auth_failure", type: "auth_failure", severity: "warning", enabled: true },
+      ],
+      cooldownMinutes: 5,
+      lastAlerts: {},
+    };
+  }
+}
+
+function writeAlertConfig(config) {
+  fs.writeFileSync(ALERT_CONFIG_PATH, JSON.stringify(config, null, 2));
+}
+
+async function sendTelegramAlert(message) {
+  const config = readAlertConfig();
+  if (!config.telegram.enabled || !config.telegram.botToken || !config.telegram.chatId) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${config.telegram.botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: config.telegram.chatId,
+        text: message,
+        parse_mode: "Markdown",
+      }),
+    });
+  } catch (err) {
+    console.warn("[telegram-alert] send failed:", err.message);
+  }
+}
+
+function checkAlertRules(entry) {
+  const config = readAlertConfig();
+  if (!config.telegram.enabled) return;
+  for (const rule of config.rules) {
+    if (!rule.enabled) continue;
+    if (entry.type === rule.type || entry.type.includes(rule.type)) {
+      const lastAlert = config.lastAlerts[rule.id];
+      const cooldown = (config.cooldownMinutes || 5) * 60 * 1000;
+      if (lastAlert && Date.now() - new Date(lastAlert).getTime() < cooldown) continue;
+      config.lastAlerts[rule.id] = new Date().toISOString();
+      writeAlertConfig(config);
+      const icon = rule.severity === "critical" ? "🚨" : rule.severity === "warning" ? "⚠️" : "ℹ️";
+      const msg = `${icon} *JClaw Alert*\n*Type:* ${entry.type}\n*Detail:* ${JSON.stringify(entry.detail || {}).slice(0, 500)}\n*User:* ${entry.user?.username || "system"}\n*Time:* ${entry.ts}`;
+      sendTelegramAlert(msg);
+    }
+  }
 }
 
 // ── API Token Management ────────────────────────────────────────────────
@@ -463,6 +562,102 @@ const ROLES = {
   "super-admin": { level: 5, label: "Super Admin", permissions: ["view:*", "edit:*", "manage:*", "admin:gateway", "admin:config"] },
   "owner": { level: 6, label: "Owner", permissions: ["*"] },
 };
+
+// Per-role model quotas: owner gets unlimited, others get tiered access
+const ROLE_MODEL_QUOTAS = {
+  "owner":         { paidRequestsPerDay: Infinity, freeRequestsPerDay: Infinity, maxConcurrentSessions: 10 },
+  "super-admin":   { paidRequestsPerDay: 50,       freeRequestsPerDay: Infinity, maxConcurrentSessions: 5 },
+  "admin":         { paidRequestsPerDay: 25,        freeRequestsPerDay: Infinity, maxConcurrentSessions: 4 },
+  "read-write":    { paidRequestsPerDay: 10,        freeRequestsPerDay: Infinity, maxConcurrentSessions: 3 },
+  "read":          { paidRequestsPerDay: 3,         freeRequestsPerDay: 100,      maxConcurrentSessions: 2 },
+  "limited-read":  { paidRequestsPerDay: 0,         freeRequestsPerDay: 50,       maxConcurrentSessions: 1 },
+};
+
+// ── Per-User Usage Tracking ─────────────────────────────────────────────
+const USER_USAGE_PATH = path.join(STATE_DIR, "user-usage.json");
+
+function readUserUsage() {
+  try {
+    return JSON.parse(fs.readFileSync(USER_USAGE_PATH, "utf8"));
+  } catch {
+    return { users: {}, resetDate: new Date().toISOString().slice(0, 10) };
+  }
+}
+
+function writeUserUsage(usage) {
+  fs.writeFileSync(USER_USAGE_PATH, JSON.stringify(usage, null, 2));
+}
+
+function getUserUsageToday(userId) {
+  const usage = readUserUsage();
+  const today = new Date().toISOString().slice(0, 10);
+  if (usage.resetDate !== today) {
+    usage.users = {};
+    usage.resetDate = today;
+    writeUserUsage(usage);
+  }
+  if (!usage.users[userId]) {
+    usage.users[userId] = { paidRequests: 0, freeRequests: 0, activeSessions: [] };
+  }
+  return usage.users[userId];
+}
+
+function incrementUserUsage(userId, modelTier) {
+  const usage = readUserUsage();
+  const today = new Date().toISOString().slice(0, 10);
+  if (usage.resetDate !== today) { usage.users = {}; usage.resetDate = today; }
+  if (!usage.users[userId]) { usage.users[userId] = { paidRequests: 0, freeRequests: 0, activeSessions: [] }; }
+  if (modelTier === "free") {
+    usage.users[userId].freeRequests++;
+  } else {
+    usage.users[userId].paidRequests++;
+  }
+  writeUserUsage(usage);
+  return usage.users[userId];
+}
+
+function checkUserQuota(userId, role, modelTier) {
+  const quotas = ROLE_MODEL_QUOTAS[role] || ROLE_MODEL_QUOTAS["limited-read"];
+  const userUsage = getUserUsageToday(userId);
+  if (modelTier === "free") {
+    if (userUsage.freeRequests >= quotas.freeRequestsPerDay) {
+      return { allowed: false, reason: `Free model daily limit reached (${quotas.freeRequestsPerDay})` };
+    }
+  } else {
+    if (userUsage.paidRequests >= quotas.paidRequestsPerDay) {
+      return { allowed: false, reason: `Paid model daily limit reached (${quotas.paidRequestsPerDay}). Try a free model instead.` };
+    }
+  }
+  return { allowed: true };
+}
+
+// ── Concurrent Session Tracking ─────────────────────────────────────────
+const activeSessions = new Map(); // userId → Set of sessionIds
+
+function trackSession(userId, sessionId) {
+  if (!activeSessions.has(userId)) activeSessions.set(userId, new Set());
+  activeSessions.get(userId).add(sessionId);
+}
+
+function untrackSession(userId, sessionId) {
+  if (activeSessions.has(userId)) {
+    activeSessions.get(userId).delete(sessionId);
+    if (activeSessions.get(userId).size === 0) activeSessions.delete(userId);
+  }
+}
+
+function getUserSessionCount(userId) {
+  return activeSessions.has(userId) ? activeSessions.get(userId).size : 0;
+}
+
+function checkConcurrentLimit(userId, role) {
+  const quotas = ROLE_MODEL_QUOTAS[role] || ROLE_MODEL_QUOTAS["limited-read"];
+  const count = getUserSessionCount(userId);
+  if (count >= quotas.maxConcurrentSessions) {
+    return { allowed: false, reason: `Concurrent session limit reached (${quotas.maxConcurrentSessions})` };
+  }
+  return { allowed: true };
+}
 
 function readUsers() {
   try {
@@ -2581,31 +2776,299 @@ app.post("/setup/api/projects/create", requireSetupAuth, async (req, res) => {
   }
 });
 
-// AI project idea generation
-app.post("/setup/api/projects/ideas", requireSetupAuth, async (req, res) => {
-  const { context } = req.body || {};
-  try {
-    // Use the agent to generate project ideas based on workspace context
-    const projectsR = await runCmd("sh", ["-c", `ls -1 "${WORKSPACE_DIR}" 2>/dev/null | head -20`]);
-    const existingProjects = projectsR.output.trim();
+// AI project idea generation (SSE streaming to reduce perceived latency)
+app.post("/setup/api/projects/ideas", requireSetupAuth, (req, res) => {
+  const { context, stream } = req.body || {};
 
-    const prompt = `Based on the existing projects: ${existingProjects}. ${context || "Suggest 5 innovative project ideas that complement the existing portfolio. Include: AI/ML projects, web applications, automation tools, and data analysis projects."} Format as JSON array with fields: name, description, template (node/python/other), category, difficulty (easy/medium/hard).`;
+  if (stream) {
+    // SSE streaming mode - send chunks as they arrive
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
 
-    const agentArgs = ["agent", "--session-id", "project-ideas", "--message", prompt, "--timeout", "60"];
-    const r = await runCmd(OPENCLAW_NODE, clawArgs(agentArgs), { timeout: 70000 });
-
-    // Try to extract JSON from output
-    let ideas = [];
-    const output = r.output || "";
-    const jsonMatch = output.match(/\[[\s\S]*?\]/);
-    if (jsonMatch) {
-      try { ideas = JSON.parse(jsonMatch[0]); } catch { /* */ }
+    function sendSSE(event, data) {
+      try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* closed */ }
     }
 
-    return res.json({ ok: true, ideas, raw: output.slice(0, 5000) });
+    (async () => {
+      try {
+        const projectsR = await runCmd("sh", ["-c", `ls -1 "${WORKSPACE_DIR}" 2>/dev/null | head -20`]);
+        const existingProjects = projectsR.output.trim();
+        const prompt = `Based on the existing projects: ${existingProjects}. ${context || "Suggest 5 innovative project ideas that complement the existing portfolio. Include: AI/ML projects, web applications, automation tools, and data analysis projects."} Format as JSON array with fields: name, description, template (node/python/other), category, difficulty (easy/medium/hard).`;
+
+        sendSSE("status", { status: "generating" });
+        const proc = childProcess.spawn(OPENCLAW_NODE, clawArgs(["agent", "--session-id", "project-ideas", "--message", prompt, "--timeout", "60"]), {
+          env: { ...process.env, OPENCLAW_STATE_DIR: STATE_DIR, OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR },
+        });
+
+        let fullOutput = "";
+        proc.stdout?.on("data", (d) => { const t = d.toString("utf8"); fullOutput += t; sendSSE("chunk", { text: t }); });
+        proc.stderr?.on("data", (d) => { const t = d.toString("utf8"); fullOutput += t; });
+        proc.on("close", (code) => {
+          let ideas = [];
+          const jsonMatch = fullOutput.match(/\[[\s\S]*?\]/);
+          if (jsonMatch) { try { ideas = JSON.parse(jsonMatch[0]); } catch { /* */ } }
+          sendSSE("done", { ideas, raw: fullOutput.slice(0, 5000) });
+          try { res.end(); } catch { /* closed */ }
+        });
+        proc.on("error", (err) => { sendSSE("error", { message: err.message }); try { res.end(); } catch { /* */ } });
+        req.on("close", () => { try { proc.kill("SIGTERM"); } catch { /* */ } });
+      } catch (err) {
+        sendSSE("error", { message: err.message });
+        try { res.end(); } catch { /* */ }
+      }
+    })();
+    return;
+  }
+
+  // Non-streaming fallback
+  (async () => {
+    try {
+      const projectsR = await runCmd("sh", ["-c", `ls -1 "${WORKSPACE_DIR}" 2>/dev/null | head -20`]);
+      const existingProjects = projectsR.output.trim();
+      const prompt = `Based on the existing projects: ${existingProjects}. ${context || "Suggest 5 innovative project ideas that complement the existing portfolio. Include: AI/ML projects, web applications, automation tools, and data analysis projects."} Format as JSON array with fields: name, description, template (node/python/other), category, difficulty (easy/medium/hard).`;
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(["agent", "--session-id", "project-ideas", "--message", prompt, "--timeout", "60"]), { timeout: 70000 });
+      let ideas = [];
+      const output = r.output || "";
+      const jsonMatch = output.match(/\[[\s\S]*?\]/);
+      if (jsonMatch) { try { ideas = JSON.parse(jsonMatch[0]); } catch { /* */ } }
+      return res.json({ ok: true, ideas, raw: output.slice(0, 5000) });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  })();
+});
+
+// ── Project Detail & Actions ────────────────────────────────────────────
+
+app.get("/setup/api/projects/:name", requireSetupAuth, async (req, res) => {
+  const projName = req.params.name.replace(/[^a-zA-Z0-9_.-]/g, "");
+  const projDir = path.join(WORKSPACE_DIR, projName);
+  if (!fs.existsSync(projDir)) return res.status(404).json({ ok: false, error: "Project not found" });
+
+  try {
+    const [branch, log, status, remotes, readme] = await Promise.all([
+      runCmd("git", ["-C", projDir, "branch", "--show-current"]),
+      runCmd("git", ["-C", projDir, "log", "--oneline", "--pretty=format:%h|%s|%an|%ar", "-20"]),
+      runCmd("git", ["-C", projDir, "status", "--short"]),
+      runCmd("git", ["-C", projDir, "remote", "-v"]),
+      new Promise(resolve => {
+        try { resolve(fs.readFileSync(path.join(projDir, "README.md"), "utf8").slice(0, 3000)); }
+        catch { resolve(""); }
+      }),
+    ]);
+
+    // List top-level files
+    let files = [];
+    try {
+      files = fs.readdirSync(projDir, { withFileTypes: true })
+        .filter(e => !e.name.startsWith(".git") || e.name === ".gitignore")
+        .map(e => ({ name: e.name, type: e.isDirectory() ? "dir" : "file" }))
+        .sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1);
+    } catch { /* skip */ }
+
+    // Parse commits
+    const commits = (log.output || "").split("\n").filter(Boolean).map(line => {
+      const [hash, message, author, time] = line.split("|");
+      return { hash, message, author, time };
+    });
+
+    // Get branches
+    let branches = [];
+    try {
+      const branchR = await runCmd("git", ["-C", projDir, "branch", "-a", "--no-color"]);
+      branches = (branchR.output || "").split("\n").map(b => b.trim().replace(/^\* /, "")).filter(Boolean);
+    } catch { /* skip */ }
+
+    return res.json({
+      ok: true,
+      name: projName,
+      branch: (branch.output || "").trim(),
+      commits,
+      dirty: (status.output || "").trim().split("\n").filter(Boolean),
+      remotes: (remotes.output || "").trim(),
+      branches,
+      files,
+      readme,
+    });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+app.post("/setup/api/projects/:name/action", requireSetupAuth, async (req, res) => {
+  const projName = req.params.name.replace(/[^a-zA-Z0-9_.-]/g, "");
+  const projDir = path.join(WORKSPACE_DIR, projName);
+  if (!fs.existsSync(projDir)) return res.status(404).json({ ok: false, error: "Project not found" });
+
+  const { action, branch, message } = req.body || {};
+  if (!action) return res.status(400).json({ ok: false, error: "Action required" });
+
+  try {
+    let result;
+    switch (action) {
+      case "pull":
+        result = await runCmd("git", ["-C", projDir, "pull", "--ff-only"], { timeout: 30000 });
+        break;
+      case "fetch":
+        result = await runCmd("git", ["-C", projDir, "fetch", "--all"], { timeout: 30000 });
+        break;
+      case "checkout":
+        if (!branch) return res.status(400).json({ ok: false, error: "Branch required for checkout" });
+        result = await runCmd("git", ["-C", projDir, "checkout", branch.replace(/[^a-zA-Z0-9/_.-]/g, "")]);
+        break;
+      case "diff":
+        result = await runCmd("git", ["-C", projDir, "diff", "--stat"]);
+        break;
+      case "log":
+        result = await runCmd("git", ["-C", projDir, "log", "--oneline", "-30"]);
+        break;
+      case "stash":
+        result = await runCmd("git", ["-C", projDir, "stash"]);
+        break;
+      case "stash-pop":
+        result = await runCmd("git", ["-C", projDir, "stash", "pop"]);
+        break;
+      default:
+        return res.status(400).json({ ok: false, error: `Unknown action: ${action}` });
+    }
+    appendActivity("project_action", { project: projName, action, exit: result.code }, req.dashUser);
+    return res.json({ ok: true, output: (result.output || "").slice(0, 5000), code: result.code });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Browse project files
+app.get("/setup/api/projects/:name/file", requireSetupAuth, (req, res) => {
+  const projName = req.params.name.replace(/[^a-zA-Z0-9_.-]/g, "");
+  const filePath = req.query.path || "";
+  const fullPath = path.resolve(path.join(WORKSPACE_DIR, projName, filePath));
+  // Ensure path is within project
+  if (!fullPath.startsWith(path.join(WORKSPACE_DIR, projName))) {
+    return res.status(403).json({ ok: false, error: "Path traversal blocked" });
+  }
+  if (!fs.existsSync(fullPath)) return res.status(404).json({ ok: false, error: "Not found" });
+
+  const stat = fs.statSync(fullPath);
+  if (stat.isDirectory()) {
+    const entries = fs.readdirSync(fullPath, { withFileTypes: true })
+      .filter(e => !e.name.startsWith(".git") || e.name === ".gitignore")
+      .map(e => ({ name: e.name, type: e.isDirectory() ? "dir" : "file" }))
+      .sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1);
+    return res.json({ ok: true, type: "dir", entries, path: filePath });
+  }
+  // Read file (limit 100KB)
+  if (stat.size > 100 * 1024) return res.json({ ok: true, type: "file", content: "(file too large)", path: filePath, size: stat.size });
+  const content = fs.readFileSync(fullPath, "utf8");
+  return res.json({ ok: true, type: "file", content, path: filePath, size: stat.size });
+});
+
+// ── GitHub Webhook (auto-sync on push) ──────────────────────────────────
+
+const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET?.trim() || "";
+
+app.post("/webhooks/github", express.raw({ type: "application/json" }), async (req, res) => {
+  // Verify webhook signature if secret is configured
+  if (WEBHOOK_SECRET) {
+    const sig = req.headers["x-hub-signature-256"] || "";
+    const body = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+    const expected = "sha256=" + crypto.createHmac("sha256", WEBHOOK_SECRET).update(body).digest("hex");
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+      return res.status(401).json({ ok: false, error: "Invalid signature" });
+    }
+  }
+
+  const event = req.headers["x-github-event"];
+  const payload = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+
+  if (event === "push") {
+    const repo = payload.repository?.full_name;
+    const branch = (payload.ref || "").replace("refs/heads/", "");
+    const projName = repo ? repo.split("/").pop() : null;
+
+    if (projName) {
+      const projDir = path.join(WORKSPACE_DIR, projName);
+      if (fs.existsSync(projDir)) {
+        appendActivity("webhook_push", { repo, branch, commits: (payload.commits || []).length });
+        // Auto-pull if on the same branch
+        try {
+          const currentBranch = await runCmd("git", ["-C", projDir, "branch", "--show-current"]);
+          if (currentBranch.output.trim() === branch) {
+            const pullR = await runCmd("git", ["-C", projDir, "pull", "--ff-only"], { timeout: 30000 });
+            appendActivity("webhook_auto_sync", { repo, branch, result: pullR.code === 0 ? "success" : "failed" });
+            broadcastSSE("project_updated", { project: projName, branch, action: "auto-sync" });
+          }
+        } catch (err) {
+          console.warn("[webhook] auto-pull failed:", err.message);
+        }
+      }
+    }
+  }
+
+  return res.json({ ok: true, event });
+});
+
+// ── Health Monitoring ───────────────────────────────────────────────────
+
+let healthCheckTimer = null;
+const HEALTH_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+async function performHealthCheck() {
+  const checks = {
+    gateway: isGatewayReady(),
+    configured: isConfigured(),
+    memoryMB: Math.floor(process.memoryUsage().rss / 1024 / 1024),
+    uptime: Math.floor(process.uptime()),
+    diskUsage: null,
+  };
+
+  // Check disk usage
+  try {
+    const df = await runCmd("sh", ["-c", "df -h /data 2>/dev/null | tail -1 | awk '{print $5}'"]);
+    checks.diskUsage = df.output.trim();
+  } catch { /* skip */ }
+
+  // Alert if gateway is down
+  if (!checks.gateway && isConfigured()) {
+    appendActivity("gateway_error", { status: "down", memory: checks.memoryMB });
+  }
+
+  // Alert on high memory (>512MB)
+  if (checks.memoryMB > 512) {
+    appendActivity("high_memory", { memoryMB: checks.memoryMB });
+  }
+
+  // Alert on high disk usage
+  if (checks.diskUsage) {
+    const pct = parseInt(checks.diskUsage);
+    if (pct > 90) {
+      appendActivity("high_disk_usage", { usage: checks.diskUsage });
+    }
+  }
+
+  // Broadcast health status to SSE clients
+  broadcastSSE("health", checks);
+  return checks;
+}
+
+function startHealthMonitor() {
+  if (healthCheckTimer) return;
+  healthCheckTimer = setInterval(performHealthCheck, HEALTH_CHECK_INTERVAL);
+  // Run initial check after 30s
+  setTimeout(performHealthCheck, 30000);
+}
+
+function stopHealthMonitor() {
+  if (healthCheckTimer) { clearInterval(healthCheckTimer); healthCheckTimer = null; }
+}
+
+app.get("/setup/api/health/check", requireSetupAuth, async (_req, res) => {
+  const checks = await performHealthCheck();
+  return res.json({ ok: true, ...checks });
 });
 
 // ── Tools Management ────────────────────────────────────────────────────
@@ -2689,8 +3152,73 @@ app.post("/setup/api/tools/set-env", requireSetupAuth, async (req, res) => {
 // ── Activity Log API ────────────────────────────────────────────────────
 
 app.get("/setup/api/activity", requireSetupAuth, (req, res) => {
-  const limit = Math.min(Number(req.query?.limit) || 100, 500);
-  return res.json({ ok: true, entries: readActivityLog(limit) });
+  const limit = Math.min(Number(req.query?.limit) || 100, 2000);
+  const { user, type, from, to, search } = req.query || {};
+  const entries = filterActivityLog({ limit, user, type, from, to, search });
+  // Compute type summary for filter UI
+  const typeCounts = {};
+  for (const e of entries) { typeCounts[e.type] = (typeCounts[e.type] || 0) + 1; }
+  return res.json({ ok: true, entries, typeCounts, total: entries.length });
+});
+
+// Alert config management
+app.get("/setup/api/alerts/config", requireSetupAuth, (_req, res) => {
+  return res.json({ ok: true, config: readAlertConfig() });
+});
+
+app.post("/setup/api/alerts/config", requireSetupAuth, (req, res) => {
+  const config = readAlertConfig();
+  const { telegram, rules, cooldownMinutes } = req.body || {};
+  if (telegram && typeof telegram === "object") {
+    if (typeof telegram.enabled === "boolean") config.telegram.enabled = telegram.enabled;
+    if (typeof telegram.botToken === "string") config.telegram.botToken = telegram.botToken.trim();
+    if (typeof telegram.chatId === "string") config.telegram.chatId = telegram.chatId.trim();
+  }
+  if (Array.isArray(rules)) {
+    config.rules = rules.filter(r => r.id && r.type).slice(0, 20);
+  }
+  if (typeof cooldownMinutes === "number" && cooldownMinutes >= 1) config.cooldownMinutes = cooldownMinutes;
+  writeAlertConfig(config);
+  appendActivity("alerts_config_updated", {}, req.dashUser);
+  return res.json({ ok: true, config });
+});
+
+app.post("/setup/api/alerts/test", requireSetupAuth, async (req, res) => {
+  await sendTelegramAlert("🧪 *Test Alert* from JClaw Dashboard\nIf you see this, alerts are working!");
+  return res.json({ ok: true });
+});
+
+// User quota info
+app.get("/setup/api/quota", requireSetupAuth, (req, res) => {
+  const user = req.dashUser;
+  const quotas = ROLE_MODEL_QUOTAS[user.role] || ROLE_MODEL_QUOTAS["limited-read"];
+  const usage = getUserUsageToday(user.id);
+  return res.json({
+    ok: true,
+    quotas,
+    usage,
+    activeSessions: getUserSessionCount(user.id),
+  });
+});
+
+// All users' usage (owner only)
+app.get("/setup/api/usage", requireSetupAuth, (req, res) => {
+  if (req.dashUser.role !== "owner") return res.status(403).json({ ok: false, error: "Owner only" });
+  const usage = readUserUsage();
+  return res.json({ ok: true, ...usage });
+});
+
+// Real-time SSE event stream
+app.get("/setup/api/events", requireSetupAuth, (req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.write("event: connected\ndata: {}\n\n");
+  sseClients.add(res);
+  req.on("close", () => { sseClients.delete(res); });
 });
 
 // ── Runner: Edit task ───────────────────────────────────────────────────
@@ -2878,9 +3406,31 @@ app.post("/setup/api/chat/send", requireSetupAuth, (req, res) => {
   if (!message || typeof message !== "string" || !message.trim()) {
     return res.status(400).json({ ok: false, error: "Missing message" });
   }
+
+  const user = req.dashUser;
   const sid = (typeof sessionId === "string" && sessionId.trim())
     ? sessionId.trim().slice(0, 100)
     : `chat-${Date.now()}`;
+
+  // Check concurrent session limit
+  const concCheck = checkConcurrentLimit(user.id, user.role);
+  if (!concCheck.allowed) {
+    return res.status(429).json({ ok: false, error: concCheck.reason });
+  }
+
+  // Check model quota (determine tier from current model pool)
+  const pool = readModelPool();
+  const currentModel = pool.models.find(m => m.enabled) || {};
+  const modelTier = currentModel.tier || "standard";
+  const quotaCheck = checkUserQuota(user.id, user.role, modelTier);
+  if (!quotaCheck.allowed) {
+    appendActivity("quota_exceeded", { userId: user.id, modelTier, reason: quotaCheck.reason }, user);
+    return res.status(429).json({ ok: false, error: quotaCheck.reason });
+  }
+
+  // Track session and usage
+  trackSession(user.id, sid);
+  incrementUserUsage(user.id, modelTier);
 
   // Set up SSE
   res.writeHead(200, {
@@ -2928,18 +3478,21 @@ app.post("/setup/api/chat/send", requireSetupAuth, (req, res) => {
   });
 
   proc.on("close", (code) => {
+    untrackSession(user.id, sid);
     sendSSE("done", { code, output: fullOutput.slice(-5000) });
-    appendActivity("chat_message", { sessionId: sid, length: message.length });
+    appendActivity("chat_message", { sessionId: sid, length: message.length }, user);
     try { res.end(); } catch { /* already closed */ }
   });
 
   proc.on("error", (err) => {
+    untrackSession(user.id, sid);
     sendSSE("error", { message: err.message });
     try { res.end(); } catch { /* already closed */ }
   });
 
   // If client disconnects, kill the process
   req.on("close", () => {
+    untrackSession(user.id, sid);
     try { proc.kill("SIGTERM"); } catch { /* already exited */ }
   });
 });
@@ -3610,9 +4163,10 @@ const server = app.listen(PORT, () => {
         console.warn(`[wrapper] doctor --fix failed: ${err.message}`);
       }
       await ensureGatewayRunning();
-      // Start auto-scheduler and model scanner after gateway is ready
+      // Start auto-scheduler, model scanner, and health monitor after gateway is ready
       startScheduler();
       startAutoScanner();
+      startHealthMonitor();
     })().catch((err) => {
       console.error(`[wrapper] failed to start gateway at boot: ${err.message}`);
     });
@@ -3687,6 +4241,7 @@ async function gracefulShutdown(signal) {
   shuttingDown = true;
   stopScheduler();
   stopAutoScanner();
+  stopHealthMonitor();
 
   if (setupRateLimiter.cleanupInterval) {
     clearInterval(setupRateLimiter.cleanupInterval);

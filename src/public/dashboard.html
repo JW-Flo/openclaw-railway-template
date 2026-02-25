@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenClaw Dashboard</title>
 <style>
+/* ── Theme System (Dark + Light) ──────────────────────────────────────── */
 :root {
   --bg: #0f0f1a;
   --surface: #1a1a2e;
@@ -20,6 +21,18 @@
   --blue: #3b82f6;
   --mono: "SF Mono", "Fira Code", "Cascadia Code", monospace;
   --sans: system-ui, -apple-system, sans-serif;
+  --output-bg: #111;
+  --shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+[data-theme="light"] {
+  --bg: #f5f5f7;
+  --surface: #ffffff;
+  --surface2: #f0f0f2;
+  --border: #d1d1d6;
+  --text: #1d1d1f;
+  --text2: #6e6e73;
+  --output-bg: #f8f8fa;
+  --shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -27,285 +40,354 @@ body {
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
+  transition: background 0.2s, color 0.2s;
 }
+
+/* ── Header ───────────────────────────────────────────────────────────── */
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 24px;
+  padding: 12px 24px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
-.header h1 {
-  font-size: 20px;
-  font-weight: 600;
-}
-.header .nav-links {
-  display: flex;
-  gap: 16px;
-}
-.header .nav-links a {
-  color: var(--text2);
-  text-decoration: none;
-  font-size: 14px;
-}
+.header h1 { font-size: 18px; font-weight: 600; white-space: nowrap; }
+.header-right { display: flex; align-items: center; gap: 12px; }
+.header .nav-links { display: flex; gap: 12px; }
+.header .nav-links a { color: var(--text2); text-decoration: none; font-size: 13px; }
 .header .nav-links a:hover { color: var(--accent2); }
+.theme-toggle {
+  width: 32px; height: 32px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface2);
+  color: var(--text2); cursor: pointer; font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+.theme-toggle:hover { border-color: var(--accent); color: var(--accent2); }
+.quota-badge {
+  font-size: 11px; padding: 3px 8px; border-radius: 10px;
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text2); font-family: var(--mono);
+}
+
+/* ── Tabs (horizontally scrollable on mobile) ─────────────────────────── */
 .tabs {
-  display: flex;
-  gap: 0;
+  display: flex; gap: 0;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   padding: 0 24px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+.tabs::-webkit-scrollbar { display: none; }
 .tab {
-  padding: 12px 20px;
-  cursor: pointer;
-  font-size: 14px;
-  color: var(--text2);
-  border-bottom: 2px solid transparent;
-  transition: all 0.15s;
-  user-select: none;
+  padding: 10px 16px; cursor: pointer; font-size: 13px;
+  color: var(--text2); border-bottom: 2px solid transparent;
+  transition: all 0.15s; user-select: none; white-space: nowrap;
+  flex-shrink: 0;
 }
 .tab:hover { color: var(--text); }
-.tab.active {
-  color: var(--accent2);
-  border-bottom-color: var(--accent);
-}
-.content {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 24px;
-}
+.tab.active { color: var(--accent2); border-bottom-color: var(--accent); }
+
+/* ── Content ──────────────────────────────────────────────────────────── */
+.content { max-width: 1200px; margin: 0 auto; padding: 20px; }
 .panel { display: none; }
 .panel.active { display: block; }
 
-/* Cards */
+/* ── Cards ────────────────────────────────────────────────────────────── */
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px; margin-bottom: 20px;
 }
 .card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px; box-shadow: var(--shadow);
 }
 .card h3 {
-  font-size: 14px;
-  color: var(--text2);
-  margin-bottom: 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  font-size: 11px; color: var(--text2); margin-bottom: 6px;
+  text-transform: uppercase; letter-spacing: 0.5px;
 }
-.card .value {
-  font-size: 24px;
-  font-weight: 700;
-}
-.card .sub {
-  font-size: 12px;
-  color: var(--text2);
-  margin-top: 4px;
-}
+.card .value { font-size: 22px; font-weight: 700; }
+.card .sub { font-size: 11px; color: var(--text2); margin-top: 3px; }
+.card.clickable { cursor: pointer; transition: border-color 0.15s; }
+.card.clickable:hover { border-color: var(--accent); }
 
-/* Status indicators */
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-}
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-}
+/* ── Status indicators ────────────────────────────────────────────────── */
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.green { background: var(--green); }
 .dot.red { background: var(--red); }
 .dot.yellow { background: var(--yellow); }
+.dot.blue { background: var(--blue); }
 
-/* Tables */
+/* ── Tables ───────────────────────────────────────────────────────────── */
 .table-wrap {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-  margin-bottom: 24px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; overflow: hidden; margin-bottom: 20px;
+  box-shadow: var(--shadow);
 }
-.table-wrap h3 {
-  padding: 12px 16px;
-  font-size: 14px;
-  border-bottom: 1px solid var(--border);
-}
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-th, td {
-  text-align: left;
-  padding: 10px 16px;
-  font-size: 13px;
-  border-bottom: 1px solid var(--border);
-}
-th {
-  color: var(--text2);
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  font-size: 11px;
-}
+.table-wrap h3 { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid var(--border); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 8px 14px; font-size: 13px; border-bottom: 1px solid var(--border); }
+th { color: var(--text2); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; font-size: 11px; }
 tr:last-child td { border-bottom: none; }
 tr:hover td { background: var(--surface2); }
+tr.clickable { cursor: pointer; }
 
-/* Buttons */
+/* ── Buttons ──────────────────────────────────────────────────────────── */
 .btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface2);
-  color: var(--text);
-  font-size: 13px;
-  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 7px 14px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface2);
+  color: var(--text); font-size: 13px; cursor: pointer;
   transition: all 0.15s;
 }
 .btn:hover { border-color: var(--accent); color: var(--accent2); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.primary:hover { background: var(--accent2); }
-.actions { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.btn.sm { padding: 4px 10px; font-size: 12px; }
+.btn.danger { color: var(--red); border-color: var(--red); }
+.btn.danger:hover { background: var(--red); color: #fff; }
+.actions { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
 
-/* Code/output */
+/* ── Code/output ──────────────────────────────────────────────────────── */
 .output {
-  background: #111;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 12px;
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--green);
-  white-space: pre-wrap;
-  max-height: 300px;
-  overflow-y: auto;
-  margin-top: 12px;
-  display: none;
+  background: var(--output-bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px; font-family: var(--mono);
+  font-size: 12px; color: var(--green); white-space: pre-wrap;
+  max-height: 300px; overflow-y: auto; margin-top: 10px; display: none;
 }
 .output.visible { display: block; }
 
-/* Form elements */
-.form-group {
-  margin-bottom: 16px;
-}
-.form-group label {
-  display: block;
-  font-size: 13px;
-  color: var(--text2);
-  margin-bottom: 4px;
-}
-input[type="text"], select {
-  width: 100%;
-  padding: 8px 12px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  font-size: 13px;
-  font-family: var(--mono);
+/* ── Form elements ────────────────────────────────────────────────────── */
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; font-size: 12px; color: var(--text2); margin-bottom: 3px; }
+input[type="text"], input[type="search"], select {
+  width: 100%; padding: 7px 10px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-size: 13px; font-family: var(--mono);
 }
 input:focus, select:focus { outline: none; border-color: var(--accent); }
 
-/* Loading spinner */
+/* ── Loading spinner ──────────────────────────────────────────────────── */
 .spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.6s linear infinite; display: inline-block;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-.loading-row td { text-align: center; color: var(--text2); padding: 24px; }
+.loading-row td { text-align: center; color: var(--text2); padding: 20px; }
+
+/* ── Command Palette ──────────────────────────────────────────────────── */
+.palette-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  z-index: 1000; display: none; align-items: flex-start;
+  justify-content: center; padding-top: 15vh;
+}
+.palette-overlay.visible { display: flex; }
+.palette {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; width: 500px; max-width: 90vw;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.4); overflow: hidden;
+}
+.palette input {
+  width: 100%; padding: 14px 16px; background: transparent;
+  border: none; border-bottom: 1px solid var(--border);
+  color: var(--text); font-size: 15px; font-family: var(--sans);
+}
+.palette input:focus { outline: none; }
+.palette-results {
+  max-height: 300px; overflow-y: auto; padding: 4px;
+}
+.palette-item {
+  padding: 8px 14px; cursor: pointer; border-radius: 6px;
+  font-size: 13px; display: flex; justify-content: space-between;
+  align-items: center;
+}
+.palette-item:hover, .palette-item.selected { background: var(--surface2); }
+.palette-item .shortcut {
+  font-family: var(--mono); font-size: 11px; color: var(--text2);
+  background: var(--bg); padding: 2px 6px; border-radius: 4px;
+}
+
+/* ── Project Detail View ──────────────────────────────────────────────── */
+.detail-view {
+  display: none; animation: slideIn 0.15s ease-out;
+}
+.detail-view.active { display: block; }
+@keyframes slideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.breadcrumb {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--text2); margin-bottom: 14px;
+}
+.breadcrumb a { color: var(--accent2); text-decoration: none; cursor: pointer; }
+.breadcrumb a:hover { text-decoration: underline; }
+.file-list { list-style: none; }
+.file-list li {
+  padding: 6px 14px; border-bottom: 1px solid var(--border);
+  font-family: var(--mono); font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+}
+.file-list li:hover { background: var(--surface2); }
+.file-icon { color: var(--text2); width: 16px; text-align: center; }
+
+/* ── Activity Log ─────────────────────────────────────────────────────── */
+.log-filters {
+  display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;
+  align-items: center;
+}
+.log-filters input, .log-filters select {
+  width: auto; min-width: 120px;
+}
+.log-entry {
+  padding: 8px 14px; border-bottom: 1px solid var(--border);
+  font-size: 12px; display: flex; gap: 12px; align-items: flex-start;
+}
+.log-entry:hover { background: var(--surface2); }
+.log-ts { font-family: var(--mono); color: var(--text2); white-space: nowrap; min-width: 140px; }
+.log-type {
+  font-family: var(--mono); font-size: 11px; padding: 2px 6px;
+  border-radius: 4px; background: var(--surface2); white-space: nowrap;
+}
+.log-user { color: var(--accent2); min-width: 60px; }
+.log-detail { color: var(--text2); flex: 1; word-break: break-all; }
+
+/* ── Toast Notifications ──────────────────────────────────────────────── */
+.toast-container {
+  position: fixed; bottom: 20px; right: 20px; z-index: 999;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.toast {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 16px; font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  animation: toastIn 0.2s ease-out;
+  display: flex; align-items: center; gap: 8px;
+}
+@keyframes toastIn { from { opacity: 0; transform: translateY(10px); } }
+.toast.success { border-left: 3px solid var(--green); }
+.toast.error { border-left: 3px solid var(--red); }
+.toast.info { border-left: 3px solid var(--blue); }
+
+/* ── Responsive ───────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .header { padding: 10px 14px; }
+  .header h1 { font-size: 15px; }
+  .header .nav-links { gap: 8px; }
+  .header .nav-links a { font-size: 12px; }
+  .tabs { padding: 0 14px; }
+  .tab { padding: 8px 12px; font-size: 12px; }
+  .content { padding: 14px; }
+  .cards { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .card { padding: 10px; }
+  .card .value { font-size: 18px; }
+  th, td { padding: 6px 10px; font-size: 12px; }
+  .palette { width: 95vw; }
+  .log-entry { flex-wrap: wrap; }
+  .log-ts { min-width: auto; }
+}
+@media (max-width: 480px) {
+  .cards { grid-template-columns: 1fr; }
+  .header-right { gap: 6px; }
+  .quota-badge { display: none; }
+}
 </style>
 </head>
 <body>
 
 <div class="header">
   <h1>OpenClaw Dashboard</h1>
-  <div class="nav-links">
-    <a href="/setup">Setup</a>
-    <a href="/openclaw">Control UI</a>
-    <a href="/tui">TUI</a>
+  <div class="header-right">
+    <span class="quota-badge" id="quota-badge" title="Your daily usage quota"></span>
+    <div class="nav-links">
+      <a href="/setup">Setup</a>
+      <a href="/openclaw">Control UI</a>
+      <a href="/tui">TUI</a>
+    </div>
+    <button class="theme-toggle" id="theme-toggle" title="Toggle theme (Ctrl+Shift+T)">&#9789;</button>
   </div>
 </div>
 
-<div class="tabs">
+<div class="tabs" id="main-tabs">
   <div class="tab active" data-tab="overview">Overview</div>
   <div class="tab" data-tab="projects">Projects</div>
   <div class="tab" data-tab="models">Models</div>
   <div class="tab" data-tab="skills">Skills</div>
   <div class="tab" data-tab="tools">Tools</div>
+  <div class="tab" data-tab="activity">Activity</div>
 </div>
 
 <div class="content">
   <!-- Overview Tab -->
   <div class="panel active" id="panel-overview">
     <div class="cards" id="overview-cards">
-      <div class="card">
-        <h3>Gateway</h3>
-        <div class="value" id="ov-gateway"><span class="spinner"></span></div>
-      </div>
-      <div class="card">
-        <h3>Configuration</h3>
-        <div class="value" id="ov-config"><span class="spinner"></span></div>
-      </div>
-      <div class="card">
-        <h3>Current Model</h3>
-        <div class="value" id="ov-model"><span class="spinner"></span></div>
-      </div>
-      <div class="card">
-        <h3>Projects</h3>
-        <div class="value" id="ov-projects"><span class="spinner"></span></div>
-      </div>
-      <div class="card">
-        <h3>OpenClaw Version</h3>
-        <div class="value" id="ov-version"><span class="spinner"></span></div>
-      </div>
-      <div class="card">
-        <h3>Credentials</h3>
-        <div class="value" id="ov-creds"><span class="spinner"></span></div>
-      </div>
+      <div class="card"><h3>Gateway</h3><div class="value" id="ov-gateway"><span class="spinner"></span></div></div>
+      <div class="card"><h3>Configuration</h3><div class="value" id="ov-config"><span class="spinner"></span></div></div>
+      <div class="card"><h3>Current Model</h3><div class="value" id="ov-model"><span class="spinner"></span></div></div>
+      <div class="card"><h3>Projects</h3><div class="value" id="ov-projects"><span class="spinner"></span></div></div>
+      <div class="card"><h3>Uptime</h3><div class="value" id="ov-uptime"><span class="spinner"></span></div></div>
+      <div class="card"><h3>Memory</h3><div class="value" id="ov-memory"><span class="spinner"></span></div></div>
     </div>
     <div class="table-wrap">
       <h3>Recent Gateway Logs</h3>
-      <div id="ov-logs" style="padding:12px;font-family:var(--mono);font-size:12px;color:var(--text2);max-height:250px;overflow-y:auto;white-space:pre-wrap;">Loading...</div>
+      <div id="ov-logs" style="padding:10px;font-family:var(--mono);font-size:11px;color:var(--text2);max-height:220px;overflow-y:auto;white-space:pre-wrap;">Loading...</div>
     </div>
   </div>
 
   <!-- Projects Tab -->
   <div class="panel" id="panel-projects">
-    <div class="actions">
-      <button class="btn primary" id="btn-sync-projects">Sync All Projects</button>
-      <button class="btn" id="btn-refresh-projects">Refresh</button>
+    <!-- Project List View -->
+    <div id="projects-list-view">
+      <div class="actions">
+        <button class="btn primary" id="btn-sync-projects">Sync All</button>
+        <button class="btn" id="btn-refresh-projects">Refresh</button>
+      </div>
+      <div class="table-wrap">
+        <h3>Managed Projects</h3>
+        <table>
+          <thead><tr><th>Name</th><th>Branch</th><th>Last Commit</th><th>Status</th></tr></thead>
+          <tbody id="projects-tbody">
+            <tr class="loading-row"><td colspan="4"><span class="spinner"></span> Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="output" id="projects-output"></div>
     </div>
-    <div class="table-wrap">
-      <h3>Managed Projects</h3>
-      <table>
-        <thead><tr><th>Name</th><th>Branch</th><th>Last Commit</th><th>Status</th></tr></thead>
-        <tbody id="projects-tbody">
-          <tr class="loading-row"><td colspan="4"><span class="spinner"></span> Loading...</td></tr>
-        </tbody>
-      </table>
+    <!-- Project Detail View -->
+    <div class="detail-view" id="project-detail">
+      <div class="breadcrumb">
+        <a id="proj-back">Projects</a> <span>/</span> <span id="proj-detail-name"></span>
+      </div>
+      <div class="cards" style="margin-bottom:14px">
+        <div class="card"><h3>Branch</h3><div class="value" id="proj-branch" style="font-size:16px;font-family:var(--mono)"></div></div>
+        <div class="card"><h3>Status</h3><div class="value" id="proj-status" style="font-size:16px"></div></div>
+      </div>
+      <div class="actions" id="proj-actions">
+        <button class="btn primary" onclick="projectAction('pull')">Pull</button>
+        <button class="btn" onclick="projectAction('fetch')">Fetch</button>
+        <button class="btn" onclick="projectAction('diff')">Diff</button>
+        <button class="btn" onclick="projectAction('stash')">Stash</button>
+        <button class="btn" onclick="projectAction('stash-pop')">Stash Pop</button>
+      </div>
+      <div class="table-wrap">
+        <h3>Recent Commits</h3>
+        <table>
+          <thead><tr><th>Hash</th><th>Message</th><th>Author</th><th>When</th></tr></thead>
+          <tbody id="proj-commits"></tbody>
+        </table>
+      </div>
+      <div class="table-wrap">
+        <h3>Files</h3>
+        <ul class="file-list" id="proj-files"></ul>
+      </div>
+      <div class="output" id="proj-action-output"></div>
     </div>
-    <div class="output" id="projects-output"></div>
   </div>
 
   <!-- Models Tab -->
@@ -325,7 +407,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     </div>
     <div class="table-wrap">
       <h3>Available Models</h3>
-      <div id="models-list" style="padding:12px;font-family:var(--mono);font-size:12px;color:var(--text2);max-height:400px;overflow-y:auto;white-space:pre-wrap;">Loading...</div>
+      <div id="models-list" style="padding:10px;font-family:var(--mono);font-size:12px;color:var(--text2);max-height:350px;overflow-y:auto;white-space:pre-wrap;">Loading...</div>
     </div>
     <div class="output" id="models-output"></div>
   </div>
@@ -344,9 +426,9 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
         </tbody>
       </table>
     </div>
-    <div class="table-wrap" style="margin-top:24px">
+    <div class="table-wrap" style="margin-top:20px">
       <h3>Install from ClawHub</h3>
-      <div style="padding:12px">
+      <div style="padding:10px">
         <div class="form-group">
           <label>Search ClawHub</label>
           <div style="display:flex;gap:8px;">
@@ -354,12 +436,12 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
             <button class="btn" id="btn-search-skills">Search</button>
           </div>
         </div>
-        <div id="skills-search-results" style="font-family:var(--mono);font-size:12px;color:var(--text2);max-height:300px;overflow-y:auto;white-space:pre-wrap;display:none;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;border:1px solid var(--border);"></div>
-        <div class="form-group" style="margin-top:12px">
+        <div id="skills-search-results" style="font-family:var(--mono);font-size:12px;color:var(--text2);max-height:250px;overflow-y:auto;white-space:pre-wrap;display:none;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;border:1px solid var(--border);"></div>
+        <div class="form-group" style="margin-top:10px">
           <label>Install Skill (ClawHub slug, or github:user/repo)</label>
           <div style="display:flex;gap:8px;align-items:center;">
             <input type="text" id="skills-install-input" placeholder="e.g. skill-name or github:user/skill-repo">
-            <label style="font-size:12px;color:var(--text2);white-space:nowrap;display:flex;align-items:center;gap:4px;cursor:pointer">
+            <label style="font-size:11px;color:var(--text2);white-space:nowrap;display:flex;align-items:center;gap:4px;cursor:pointer">
               <input type="checkbox" id="skills-install-force"> Force
             </label>
             <button class="btn primary" id="btn-install-skill">Install</button>
@@ -391,319 +473,656 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
       </table>
     </div>
   </div>
+
+  <!-- Activity Log Tab -->
+  <div class="panel" id="panel-activity">
+    <div class="log-filters">
+      <input type="search" id="log-search" placeholder="Search logs..." style="min-width:200px">
+      <select id="log-type-filter"><option value="">All types</option></select>
+      <select id="log-user-filter"><option value="">All users</option></select>
+      <button class="btn sm" id="btn-refresh-logs">Refresh</button>
+      <span style="font-size:11px;color:var(--text2);margin-left:auto" id="log-count"></span>
+    </div>
+    <div class="table-wrap">
+      <div id="activity-log" style="max-height:500px;overflow-y:auto;"></div>
+    </div>
+  </div>
 </div>
+
+<!-- Command Palette -->
+<div class="palette-overlay" id="palette-overlay">
+  <div class="palette">
+    <input type="text" id="palette-input" placeholder="Type a command...">
+    <div class="palette-results" id="palette-results"></div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toast-container"></div>
 
 <script>
 (function() {
-  // Tab switching
-  const tabs = document.querySelectorAll(".tab");
-  const panels = document.querySelectorAll(".panel");
-  tabs.forEach(tab => {
-    tab.addEventListener("click", () => {
-      tabs.forEach(t => t.classList.remove("active"));
-      panels.forEach(p => p.classList.remove("active"));
-      tab.classList.add("active");
-      document.getElementById("panel-" + tab.dataset.tab).classList.add("active");
-    });
-  });
+  // ── Utilities ────────────────────────────────────────────────────────
+  function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+  function dot(color) { return '<span class="dot ' + color + '"></span>'; }
 
   async function api(method, path, body) {
     const opts = { method, headers: {} };
-    if (body) {
-      opts.headers["Content-Type"] = "application/json";
-      opts.body = JSON.stringify(body);
-    }
+    if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
     const r = await fetch(path, opts);
     return r.json();
   }
 
-  function dot(color) {
-    return '<span class="dot ' + color + '"></span>';
+  function toast(message, type) {
+    type = type || "info";
+    const container = document.getElementById("toast-container");
+    const el = document.createElement("div");
+    el.className = "toast " + type;
+    el.textContent = message;
+    container.appendChild(el);
+    setTimeout(function() { el.remove(); }, 4000);
   }
 
-  // --- Overview ---
+  function formatTime(ts) {
+    try {
+      const d = new Date(ts);
+      return d.toLocaleString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    } catch { return ts; }
+  }
+
+  // ── Theme Toggle ─────────────────────────────────────────────────────
+  var currentTheme = localStorage.getItem("jclaw-theme") || "dark";
+  document.documentElement.setAttribute("data-theme", currentTheme);
+  updateThemeIcon();
+
+  function updateThemeIcon() {
+    document.getElementById("theme-toggle").textContent = currentTheme === "dark" ? "\u263D" : "\u2600";
+  }
+
+  document.getElementById("theme-toggle").addEventListener("click", function() {
+    currentTheme = currentTheme === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", currentTheme);
+    localStorage.setItem("jclaw-theme", currentTheme);
+    updateThemeIcon();
+  });
+
+  // ── Tab Switching ────────────────────────────────────────────────────
+  var tabs = document.querySelectorAll(".tab");
+  var panels = document.querySelectorAll(".panel");
+  tabs.forEach(function(tab) {
+    tab.addEventListener("click", function() {
+      switchTab(tab.dataset.tab);
+    });
+  });
+
+  function switchTab(name) {
+    tabs.forEach(function(t) { t.classList.remove("active"); });
+    panels.forEach(function(p) { p.classList.remove("active"); });
+    var matchTab = document.querySelector('.tab[data-tab="' + name + '"]');
+    if (matchTab) matchTab.classList.add("active");
+    var panel = document.getElementById("panel-" + name);
+    if (panel) panel.classList.add("active");
+    // Reset project detail view when switching to projects
+    if (name === "projects") {
+      document.getElementById("projects-list-view").style.display = "";
+      document.getElementById("project-detail").classList.remove("active");
+    }
+    if (name === "activity") loadActivityLog();
+  }
+
+  // ── Real-time SSE ────────────────────────────────────────────────────
+  var eventSource = null;
+  function connectSSE() {
+    try {
+      eventSource = new EventSource("/setup/api/events");
+      eventSource.addEventListener("activity", function(e) {
+        try {
+          var entry = JSON.parse(e.data);
+          // If activity tab is visible, prepend the entry
+          if (document.getElementById("panel-activity").classList.contains("active")) {
+            prependLogEntry(entry);
+          }
+          // Toast for important events
+          if (entry.type === "gateway_error") toast("Gateway error detected", "error");
+          if (entry.type === "webhook_auto_sync") toast("Project auto-synced via webhook", "success");
+          if (entry.type === "task_completed") toast("Task completed: " + (entry.detail?.title || ""), "success");
+        } catch { /* ignore */ }
+      });
+      eventSource.addEventListener("health", function(e) {
+        try {
+          var h = JSON.parse(e.data);
+          // Update overview cards if visible
+          if (h.memoryMB) {
+            var mem = document.getElementById("ov-memory");
+            if (mem) mem.innerHTML = '<span style="font-size:16px">' + h.memoryMB + ' MB</span>';
+          }
+        } catch { /* ignore */ }
+      });
+      eventSource.addEventListener("project_updated", function(e) {
+        toast("Project updated", "info");
+        loadProjects();
+      });
+      eventSource.onerror = function() {
+        // Reconnect after 5s
+        setTimeout(connectSSE, 5000);
+      };
+    } catch { /* SSE not supported */ }
+  }
+  connectSSE();
+
+  // ── Quota Badge ──────────────────────────────────────────────────────
+  async function loadQuota() {
+    try {
+      var data = await api("GET", "/setup/api/quota");
+      if (data.ok) {
+        var paid = data.usage.paidRequests || 0;
+        var free = data.usage.freeRequests || 0;
+        var paidMax = data.quotas.paidRequestsPerDay;
+        var freeMax = data.quotas.freeRequestsPerDay;
+        var paidStr = paidMax === null || !isFinite(paidMax) ? paid + "/inf" : paid + "/" + paidMax;
+        document.getElementById("quota-badge").textContent = "Paid: " + paidStr + " | Free: " + free;
+        document.getElementById("quota-badge").title = "Daily model usage quota";
+      }
+    } catch { /* skip */ }
+  }
+  loadQuota();
+
+  // ── Overview ─────────────────────────────────────────────────────────
   async function loadOverview() {
-    const [health, status, model, projects, debug] = await Promise.all([
-      api("GET", "/setup/healthz"),
-      api("GET", "/setup/api/status"),
-      api("GET", "/setup/api/models/current").catch(() => ({ model: "unknown" })),
-      api("GET", "/setup/api/projects/status").catch(() => ({ projects: [] })),
-      api("GET", "/setup/api/debug"),
-    ]);
+    var _h = api("GET", "/setup/healthz");
+    var _s = api("GET", "/setup/api/status");
+    var _m = api("GET", "/setup/api/models/current").catch(function() { return { model: "unknown" }; });
+    var _p = api("GET", "/setup/api/projects/status").catch(function() { return { projects: [] }; });
+    var _d = api("GET", "/setup/api/debug");
+    var _c = api("GET", "/setup/api/connection").catch(function() { return {}; });
+
+    var results = await Promise.all([_h, _s, _m, _p, _d, _c]);
+    var health = results[0], status = results[1], model = results[2];
+    var projects = results[3], debug = results[4], conn = results[5];
 
     document.getElementById("ov-gateway").innerHTML =
       health.gatewayRunning
-        ? dot("green") + ' <span style="font-size:16px">Running</span>'
+        ? dot("green") + ' <span style="font-size:15px">Running</span>'
         : health.gatewayStarting
-          ? dot("yellow") + ' <span style="font-size:16px">Starting</span>'
-          : dot("red") + ' <span style="font-size:16px">Stopped</span>';
+          ? dot("yellow") + ' <span style="font-size:15px">Starting</span>'
+          : dot("red") + ' <span style="font-size:15px">Stopped</span>';
 
     document.getElementById("ov-config").innerHTML =
       health.configured
-        ? dot("green") + ' <span style="font-size:16px">Configured</span>'
-        : dot("red") + ' <span style="font-size:16px">Not configured</span>';
+        ? dot("green") + ' <span style="font-size:15px">Configured</span>'
+        : dot("red") + ' <span style="font-size:15px">Not configured</span>';
 
     document.getElementById("ov-model").innerHTML =
-      '<span style="font-size:16px;font-family:var(--mono)">' + (model.model || "not set") + '</span>';
+      '<span style="font-size:14px;font-family:var(--mono)">' + esc(model.model || "not set") + '</span>';
 
-    const projCount = (projects.projects || []).length;
+    var projCount = (projects.projects || []).length;
     document.getElementById("ov-projects").textContent = projCount;
 
-    document.getElementById("ov-version").innerHTML =
-      '<span style="font-size:16px;font-family:var(--mono)">' + (status.openclawVersion || "unknown") + '</span>';
+    // Uptime
+    var uptime = conn.uptime || 0;
+    var h = Math.floor(uptime / 3600);
+    var m = Math.floor((uptime % 3600) / 60);
+    document.getElementById("ov-uptime").innerHTML =
+      '<span style="font-size:16px">' + h + 'h ' + m + 'm</span>';
 
-    // Check credentials
-    const envVars = ["GH_PAT", "OPENROUTER_API_TOKEN", "ANTHROPIC_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "RAILWAY_ACCOUNT_TOKEN"];
-    const envCheck = await api("POST", "/setup/api/shell", { command: "env" }).catch(() => ({ output: "" }));
-    const envOutput = envCheck.output || "";
-    let credsOk = 0;
-    for (const v of envVars) {
-      if (envOutput.includes(v + "=")) credsOk++;
-    }
-    document.getElementById("ov-creds").innerHTML =
-      '<span style="font-size:16px">' + credsOk + '/' + envVars.length + ' set</span>' +
-      (credsOk === envVars.length ? ' ' + dot("green") : ' ' + dot("yellow"));
+    // Memory
+    var mem = conn.memory || 0;
+    document.getElementById("ov-memory").innerHTML =
+      '<span style="font-size:16px">' + mem + ' MB</span>';
 
     // Gateway logs
-    const logs = (debug.gatewayLogs || []).slice(-30).join("\n");
+    var logs = (debug.gatewayLogs || []).slice(-30).join("\n");
     document.getElementById("ov-logs").textContent = logs || "(no logs)";
   }
 
-  // --- Projects ---
+  // ── Projects ─────────────────────────────────────────────────────────
+  var currentProject = null;
+
   async function loadProjects() {
-    const data = await api("GET", "/setup/api/projects/status");
-    const tbody = document.getElementById("projects-tbody");
-    const projects = data.projects || [];
+    var data = await api("GET", "/setup/api/projects/status");
+    var tbody = document.getElementById("projects-tbody");
+    var projects = data.projects || [];
     if (projects.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text2);padding:24px">No projects cloned yet. Click "Sync All Projects" to clone.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text2);padding:20px">No projects cloned yet. Click "Sync All" to clone.</td></tr>';
       return;
     }
-    tbody.innerHTML = projects.map(p =>
-      '<tr>' +
-        '<td style="font-weight:600">' + p.name + '</td>' +
-        '<td style="font-family:var(--mono);font-size:12px">' + p.branch + '</td>' +
-        '<td style="font-family:var(--mono);font-size:12px">' + p.lastCommit + '</td>' +
+    tbody.innerHTML = projects.map(function(p) {
+      return '<tr class="clickable" data-project="' + esc(p.name) + '">' +
+        '<td style="font-weight:600">' + esc(p.name) + '</td>' +
+        '<td style="font-family:var(--mono);font-size:12px">' + esc(p.branch) + '</td>' +
+        '<td style="font-family:var(--mono);font-size:12px">' + esc(p.lastCommit) + '</td>' +
         '<td>' + (p.dirty ? dot("yellow") + " " + p.dirtyFiles + " changed" : dot("green") + " Clean") + '</td>' +
-      '</tr>'
-    ).join("");
+      '</tr>';
+    }).join("");
+
+    // Click handlers for project rows
+    tbody.querySelectorAll("tr.clickable").forEach(function(row) {
+      row.addEventListener("click", function() {
+        openProjectDetail(row.dataset.project);
+      });
+    });
   }
 
-  document.getElementById("btn-refresh-projects").addEventListener("click", loadProjects);
+  async function openProjectDetail(name) {
+    currentProject = name;
+    document.getElementById("projects-list-view").style.display = "none";
+    document.getElementById("project-detail").classList.add("active");
+    document.getElementById("proj-detail-name").textContent = name;
 
-  document.getElementById("btn-sync-projects").addEventListener("click", async () => {
-    const btn = document.getElementById("btn-sync-projects");
-    const out = document.getElementById("projects-output");
-    btn.disabled = true;
-    btn.textContent = "Syncing...";
+    try {
+      var data = await api("GET", "/setup/api/projects/" + encodeURIComponent(name));
+      if (!data.ok) { toast("Failed to load project", "error"); return; }
+
+      document.getElementById("proj-branch").textContent = data.branch || "unknown";
+      var dirtyCount = (data.dirty || []).length;
+      document.getElementById("proj-status").innerHTML = dirtyCount
+        ? dot("yellow") + " " + dirtyCount + " changed"
+        : dot("green") + " Clean";
+
+      // Commits
+      var commitsTbody = document.getElementById("proj-commits");
+      commitsTbody.innerHTML = (data.commits || []).map(function(c) {
+        return '<tr>' +
+          '<td style="font-family:var(--mono);font-size:11px;color:var(--accent2)">' + esc(c.hash || "") + '</td>' +
+          '<td>' + esc(c.message || "") + '</td>' +
+          '<td style="color:var(--text2)">' + esc(c.author || "") + '</td>' +
+          '<td style="color:var(--text2);white-space:nowrap">' + esc(c.time || "") + '</td>' +
+        '</tr>';
+      }).join("");
+
+      // Files
+      var fileList = document.getElementById("proj-files");
+      fileList.innerHTML = (data.files || []).map(function(f) {
+        var icon = f.type === "dir" ? "&#128193;" : "&#128196;";
+        return '<li data-path="' + esc(f.name) + '" data-type="' + f.type + '">' +
+          '<span class="file-icon">' + icon + '</span> ' + esc(f.name) + '</li>';
+      }).join("");
+
+      fileList.querySelectorAll("li").forEach(function(li) {
+        li.addEventListener("click", function() {
+          browseFile(name, li.dataset.path, li.dataset.type);
+        });
+      });
+    } catch (err) {
+      toast("Error: " + err.message, "error");
+    }
+  }
+
+  async function browseFile(project, filePath, type) {
+    if (type === "file") {
+      try {
+        var data = await api("GET", "/setup/api/projects/" + encodeURIComponent(project) + "/file?path=" + encodeURIComponent(filePath));
+        if (data.ok && data.type === "file") {
+          var out = document.getElementById("proj-action-output");
+          out.classList.add("visible");
+          out.textContent = "// " + filePath + "\n" + (data.content || "(empty)");
+        }
+      } catch (err) {
+        toast("Error reading file", "error");
+      }
+    }
+  }
+
+  window.projectAction = async function(action) {
+    if (!currentProject) return;
+    var out = document.getElementById("proj-action-output");
+    out.classList.add("visible");
+    out.textContent = "Running " + action + "...\n";
+    try {
+      var data = await api("POST", "/setup/api/projects/" + encodeURIComponent(currentProject) + "/action", { action: action });
+      out.textContent = data.output || JSON.stringify(data, null, 2);
+      if (data.ok) toast(action + " completed", "success");
+      // Refresh detail
+      openProjectDetail(currentProject);
+    } catch (err) {
+      out.textContent = "Error: " + err.message;
+      toast("Action failed", "error");
+    }
+  };
+
+  document.getElementById("proj-back").addEventListener("click", function() {
+    document.getElementById("project-detail").classList.remove("active");
+    document.getElementById("projects-list-view").style.display = "";
+    loadProjects();
+  });
+
+  document.getElementById("btn-refresh-projects").addEventListener("click", loadProjects);
+  document.getElementById("btn-sync-projects").addEventListener("click", async function() {
+    var btn = this;
+    var out = document.getElementById("projects-output");
+    btn.disabled = true; btn.textContent = "Syncing...";
     out.classList.add("visible");
     out.textContent = "Syncing projects...\n";
     try {
-      const repos = [
-        "JW-Flo/Project-AtlasIT",
-        "JW-Flo/AWhittleWandering",
-        "JW-Flo/market_agents",
-        "JW-Flo/JW-Site",
-      ];
-      const data = await api("POST", "/setup/api/projects/sync", { repos });
+      var repos = ["JW-Flo/Project-AtlasIT", "JW-Flo/AWhittleWandering", "JW-Flo/market_agents", "JW-Flo/JW-Site"];
+      var data = await api("POST", "/setup/api/projects/sync", { repos: repos });
       out.textContent = JSON.stringify(data, null, 2);
+      toast("Projects synced", "success");
       await loadProjects();
-    } catch (err) {
-      out.textContent = "Error: " + err.message;
-    }
-    btn.disabled = false;
-    btn.textContent = "Sync All Projects";
+    } catch (err) { out.textContent = "Error: " + err.message; }
+    btn.disabled = false; btn.textContent = "Sync All";
   });
 
-  // --- Models ---
+  // ── Models ───────────────────────────────────────────────────────────
   async function loadModels() {
-    const [current, list] = await Promise.all([
+    var results = await Promise.all([
       api("GET", "/setup/api/models/current"),
       api("GET", "/setup/api/models/list"),
     ]);
     document.getElementById("models-current").innerHTML =
-      '<span style="font-family:var(--mono)">' + (current.model || "not set") + '</span>';
-    document.getElementById("models-list").textContent = list.output || "(no models listed)";
+      '<span style="font-family:var(--mono)">' + esc(results[0].model || "not set") + '</span>';
+    document.getElementById("models-list").textContent = results[1].output || "(no models listed)";
   }
 
-  document.getElementById("btn-set-model").addEventListener("click", async () => {
-    const input = document.getElementById("model-input");
-    const out = document.getElementById("models-output");
-    const model = input.value.trim();
+  document.getElementById("btn-set-model").addEventListener("click", async function() {
+    var input = document.getElementById("model-input");
+    var out = document.getElementById("models-output");
+    var model = input.value.trim();
     if (!model) return;
     out.classList.add("visible");
     out.textContent = "Setting model to " + model + "...\n";
     try {
-      const data = await api("POST", "/setup/api/models/set", { model });
+      var data = await api("POST", "/setup/api/models/set", { model: model });
       out.textContent = data.output || JSON.stringify(data, null, 2);
+      toast("Model updated", "success");
       await loadModels();
-    } catch (err) {
-      out.textContent = "Error: " + err.message;
-    }
+    } catch (err) { out.textContent = "Error: " + err.message; }
   });
 
-  // --- Skills ---
+  // ── Skills ───────────────────────────────────────────────────────────
   async function loadSkills() {
-    const tbody = document.getElementById("skills-tbody");
+    var tbody = document.getElementById("skills-tbody");
     tbody.innerHTML = '<tr class="loading-row"><td colspan="3"><span class="spinner"></span> Loading...</td></tr>';
     try {
-      const data = await api("GET", "/setup/api/skills/list");
-      const output = data.output || "";
-      // Parse table rows from openclaw skills list output
-      // Format: "│ ✓ ready  │ name │ description │ source │"
-      const lines = output.split("\n").filter(l => l.includes("│") && !l.includes("──") && !l.includes("Status"));
+      var data = await api("GET", "/setup/api/skills/list");
+      var output = data.output || "";
+      var lines = output.split("\n").filter(function(l) { return l.includes("\u2502") && !l.includes("\u2500\u2500") && !l.includes("Status"); });
       if (lines.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--text2);padding:24px">No skills found. Install skills from ClawHub below.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--text2);padding:20px">No skills found.</td></tr>';
         return;
       }
-      function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
-      let rows = "";
-      const seen = new Set();
-      for (const line of lines) {
-        const cells = line.split("│").map(c => c.trim()).filter(Boolean);
+      var rows = "";
+      var seen = new Set();
+      for (var i = 0; i < lines.length; i++) {
+        var cells = lines[i].split("\u2502").map(function(c) { return c.trim(); }).filter(Boolean);
         if (cells.length < 3) continue;
-        const status = cells[0];
-        // Extract skill name (strip emoji prefix)
-        const rawName = cells[1].replace(/^[\s\S]{1,4}\s+/, "").trim();
+        var status = cells[0];
+        var rawName = cells[1].replace(/^[\s\S]{1,4}\s+/, "").trim();
         if (!rawName || seen.has(rawName)) continue;
         seen.add(rawName);
-        const safeName = esc(rawName);
-        const isReady = status.includes("ready");
-        const source = cells[3] || "";
-        const isWorkspace = source.includes("workspace");
-        const statusHtml = isReady
-          ? dot("green") + " Ready"
-          : dot("red") + " Missing";
-        const actionBtn = isWorkspace
-          ? '<button class="btn" onclick="uninstallSkill(\'' + safeName + '\')" style="padding:4px 10px;font-size:12px">Uninstall</button>'
+        var safeName = esc(rawName);
+        var isReady = status.includes("ready");
+        var source = cells[3] || "";
+        var isWorkspace = source.includes("workspace");
+        var statusHtml = isReady ? dot("green") + " Ready" : dot("red") + " Missing";
+        var actionBtn = isWorkspace
+          ? '<button class="btn sm" onclick="uninstallSkill(\'' + safeName + '\')">Uninstall</button>'
           : '<span style="color:var(--text2);font-size:11px">bundled</span>';
-        rows += '<tr>' +
-          '<td style="font-weight:600;font-family:var(--mono);font-size:12px">' + safeName + '</td>' +
-          '<td>' + statusHtml + '</td>' +
-          '<td>' + actionBtn + '</td></tr>';
+        rows += '<tr><td style="font-weight:600;font-family:var(--mono);font-size:12px">' + safeName + '</td><td>' + statusHtml + '</td><td>' + actionBtn + '</td></tr>';
       }
-      if (!rows) {
-        tbody.innerHTML = "";
-        const cell = document.createElement("td");
-        cell.colSpan = 3;
-        cell.style.cssText = "font-family:var(--mono);font-size:12px;white-space:pre-wrap;padding:12px";
-        cell.textContent = output;
-        const tr = document.createElement("tr");
-        tr.appendChild(cell);
-        tbody.appendChild(tr);
-      } else {
-        tbody.innerHTML = rows;
-      }
+      tbody.innerHTML = rows || '<tr><td colspan="3" style="font-family:var(--mono);font-size:12px;white-space:pre-wrap;padding:10px">' + esc(output) + '</td></tr>';
     } catch (err) {
-      tbody.innerHTML = "";
-      const cell = document.createElement("td");
-      cell.colSpan = 3;
-      cell.style.cssText = "color:var(--red);padding:12px";
-      cell.textContent = "Error loading skills: " + err.message;
-      const tr = document.createElement("tr");
-      tr.appendChild(cell);
-      tbody.appendChild(tr);
+      tbody.innerHTML = '<tr><td colspan="3" style="color:var(--red);padding:10px">Error: ' + esc(err.message) + '</td></tr>';
     }
   }
 
   window.uninstallSkill = async function(name) {
-    const out = document.getElementById("skills-output");
+    var out = document.getElementById("skills-output");
     out.classList.add("visible");
     out.textContent = "Uninstalling " + name + "...\n";
     try {
-      const data = await api("POST", "/setup/api/skills/uninstall", { name });
+      var data = await api("POST", "/setup/api/skills/uninstall", { name: name });
       out.textContent += data.output || JSON.stringify(data, null, 2);
       await loadSkills();
-    } catch (err) {
-      out.textContent += "Error: " + err.message;
-    }
+    } catch (err) { out.textContent += "Error: " + err.message; }
   };
 
   document.getElementById("btn-refresh-skills").addEventListener("click", loadSkills);
 
-  document.getElementById("btn-search-skills").addEventListener("click", async () => {
-    const input = document.getElementById("skills-search-input");
-    const results = document.getElementById("skills-search-results");
-    const query = input.value.trim();
+  document.getElementById("btn-search-skills").addEventListener("click", async function() {
+    var input = document.getElementById("skills-search-input");
+    var results = document.getElementById("skills-search-results");
+    var query = input.value.trim();
     if (!query) return;
     results.style.display = "block";
-    results.textContent = "Searching ClawHub for \"" + query + "\"...\n";
+    results.textContent = "Searching ClawHub...\n";
     try {
-      const data = await api("POST", "/setup/api/skills/search", { query });
+      var data = await api("POST", "/setup/api/skills/search", { query: query });
       results.textContent = data.output || "(no results)";
-    } catch (err) {
-      results.textContent = "Error: " + err.message;
-    }
+    } catch (err) { results.textContent = "Error: " + err.message; }
   });
 
-  document.getElementById("btn-install-skill").addEventListener("click", async () => {
-    const input = document.getElementById("skills-install-input");
-    const forceCheckbox = document.getElementById("skills-install-force");
-    const out = document.getElementById("skills-output");
-    const source = input.value.trim();
+  document.getElementById("btn-install-skill").addEventListener("click", async function() {
+    var input = document.getElementById("skills-install-input");
+    var forceCheckbox = document.getElementById("skills-install-force");
+    var out = document.getElementById("skills-output");
+    var source = input.value.trim();
     if (!source) return;
-    const force = forceCheckbox.checked;
+    var force = forceCheckbox.checked;
     out.classList.add("visible");
     out.textContent = "Installing " + source + (force ? " (force)" : "") + "...\n";
     try {
-      const data = await api("POST", "/setup/api/skills/install", { source, force });
+      var data = await api("POST", "/setup/api/skills/install", { source: source, force: force });
       out.textContent += data.output || JSON.stringify(data, null, 2);
       await loadSkills();
-    } catch (err) {
-      out.textContent += "Error: " + err.message;
-    }
+    } catch (err) { out.textContent += "Error: " + err.message; }
   });
 
-  // --- Tools ---
+  // ── Tools ────────────────────────────────────────────────────────────
   async function loadTools() {
-    const tools = [
-      { name: "gh", cmd: "gh --version" },
-      { name: "git", cmd: "git --version" },
-      { name: "node", cmd: "node --version" },
-      { name: "npm", cmd: "npm --version" },
-      { name: "jq", cmd: "jq --version" },
-      { name: "wrangler", cmd: "wrangler --version" },
-      { name: "railway", cmd: "railway version" },
-    ];
-
-    const tbody = document.getElementById("tools-tbody");
+    var toolData = await api("GET", "/setup/api/tools/list").catch(function() { return { tools: [], envVars: [] }; });
+    var tbody = document.getElementById("tools-tbody");
     tbody.innerHTML = "";
+    (toolData.tools || []).forEach(function(t) {
+      tbody.innerHTML += '<tr><td style="font-weight:600">' + esc(t.name || t.id) + '</td>' +
+        '<td>' + (t.installed ? dot("green") + " Installed" : dot("red") + " Missing") + '</td>' +
+        '<td style="font-family:var(--mono);font-size:12px">' + esc((t.version || "N/A").split("\n")[0]) + '</td></tr>';
+    });
 
-    for (const tool of tools) {
-      const r = await api("POST", "/setup/api/shell", { command: tool.cmd + " 2>&1 | head -1" }).catch(() => ({ ok: false, output: "not found" }));
-      const version = (r.output || "").trim().split("\n")[0] || "N/A";
-      tbody.innerHTML +=
-        '<tr><td style="font-weight:600">' + tool.name + '</td>' +
-        '<td>' + (r.ok ? dot("green") + " Installed" : dot("red") + " Missing") + '</td>' +
-        '<td style="font-family:var(--mono);font-size:12px">' + version + '</td></tr>';
-    }
-
-    // Environment variables
-    const envVars = [
-      "GH_PAT", "OPENROUTER_API_TOKEN", "ANTHROPIC_API_KEY",
-      "CLOUDFLARE_ACCOUNT_ID", "RAILWAY_ACCOUNT_TOKEN",
-      "TELEGRAM_API_ID", "TELEGRAM_API_HASH", "GROK_API_KEY",
-      "SETUP_PASSWORD", "OPENCLAW_GATEWAY_TOKEN",
-    ];
-
-    const envCheck = await api("POST", "/setup/api/shell", { command: "env" }).catch(() => ({ output: "" }));
-    const envOutput = envCheck.output || "";
-    const envTbody = document.getElementById("env-tbody");
+    var envTbody = document.getElementById("env-tbody");
     envTbody.innerHTML = "";
+    (toolData.envVars || []).forEach(function(v) {
+      envTbody.innerHTML += '<tr><td style="font-family:var(--mono);font-size:12px">' + esc(v.name) + '</td>' +
+        '<td>' + (v.set ? dot("green") + " Set" : dot("red") + " Not set") + '</td></tr>';
+    });
+  }
 
-    for (const v of envVars) {
-      const isSet = envOutput.includes(v + "=");
-      envTbody.innerHTML +=
-        '<tr><td style="font-family:var(--mono);font-size:12px">' + v + '</td>' +
-        '<td>' + (isSet ? dot("green") + " Set" : dot("red") + " Not set") + '</td></tr>';
+  // ── Activity Log ─────────────────────────────────────────────────────
+  async function loadActivityLog() {
+    var search = document.getElementById("log-search").value;
+    var type = document.getElementById("log-type-filter").value;
+    var user = document.getElementById("log-user-filter").value;
+
+    var params = "?limit=200";
+    if (search) params += "&search=" + encodeURIComponent(search);
+    if (type) params += "&type=" + encodeURIComponent(type);
+    if (user) params += "&user=" + encodeURIComponent(user);
+
+    var data = await api("GET", "/setup/api/activity" + params);
+    var entries = data.entries || [];
+    document.getElementById("log-count").textContent = entries.length + " entries";
+
+    // Populate type filter
+    var typeFilter = document.getElementById("log-type-filter");
+    var currentType = typeFilter.value;
+    var types = Object.keys(data.typeCounts || {}).sort();
+    typeFilter.innerHTML = '<option value="">All types</option>';
+    types.forEach(function(t) {
+      typeFilter.innerHTML += '<option value="' + esc(t) + '"' + (t === currentType ? ' selected' : '') + '>' + esc(t) + ' (' + data.typeCounts[t] + ')</option>';
+    });
+
+    // Populate user filter from entries
+    var users = new Set();
+    entries.forEach(function(e) { if (e.user?.username) users.add(e.user.username); });
+    var userFilter = document.getElementById("log-user-filter");
+    var currentUser = userFilter.value;
+    userFilter.innerHTML = '<option value="">All users</option>';
+    users.forEach(function(u) {
+      userFilter.innerHTML += '<option value="' + esc(u) + '"' + (u === currentUser ? ' selected' : '') + '>' + esc(u) + '</option>';
+    });
+
+    renderLogEntries(entries.reverse());
+  }
+
+  function renderLogEntries(entries) {
+    var container = document.getElementById("activity-log");
+    container.innerHTML = entries.map(function(e) {
+      var detail = e.detail ? JSON.stringify(e.detail).slice(0, 200) : "";
+      return '<div class="log-entry">' +
+        '<span class="log-ts">' + formatTime(e.ts) + '</span>' +
+        '<span class="log-type">' + esc(e.type) + '</span>' +
+        '<span class="log-user">' + esc(e.user?.username || "system") + '</span>' +
+        '<span class="log-detail">' + esc(detail) + '</span>' +
+      '</div>';
+    }).join("");
+    if (entries.length === 0) {
+      container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2)">No activity logged yet</div>';
     }
   }
 
-  // Load all data
-  loadOverview();
-  loadProjects();
-  loadModels();
-  loadSkills();
-  loadTools();
+  function prependLogEntry(entry) {
+    var container = document.getElementById("activity-log");
+    var detail = entry.detail ? JSON.stringify(entry.detail).slice(0, 200) : "";
+    var html = '<div class="log-entry" style="animation:slideIn 0.2s">' +
+      '<span class="log-ts">' + formatTime(entry.ts) + '</span>' +
+      '<span class="log-type">' + esc(entry.type) + '</span>' +
+      '<span class="log-user">' + esc(entry.user?.username || "system") + '</span>' +
+      '<span class="log-detail">' + esc(detail) + '</span>' +
+    '</div>';
+    container.insertAdjacentHTML("afterbegin", html);
+  }
+
+  document.getElementById("btn-refresh-logs").addEventListener("click", loadActivityLog);
+  document.getElementById("log-search").addEventListener("input", debounce(loadActivityLog, 300));
+  document.getElementById("log-type-filter").addEventListener("change", loadActivityLog);
+  document.getElementById("log-user-filter").addEventListener("change", loadActivityLog);
+
+  function debounce(fn, ms) {
+    var timer;
+    return function() {
+      clearTimeout(timer);
+      timer = setTimeout(fn, ms);
+    };
+  }
+
+  // ── Command Palette ──────────────────────────────────────────────────
+  var paletteCommands = [
+    { name: "Overview", action: function() { switchTab("overview"); }, shortcut: "1" },
+    { name: "Projects", action: function() { switchTab("projects"); }, shortcut: "2" },
+    { name: "Models", action: function() { switchTab("models"); }, shortcut: "3" },
+    { name: "Skills", action: function() { switchTab("skills"); }, shortcut: "4" },
+    { name: "Tools", action: function() { switchTab("tools"); }, shortcut: "5" },
+    { name: "Activity Log", action: function() { switchTab("activity"); }, shortcut: "6" },
+    { name: "Toggle Theme", action: function() { document.getElementById("theme-toggle").click(); }, shortcut: "T" },
+    { name: "Sync Projects", action: function() { switchTab("projects"); document.getElementById("btn-sync-projects").click(); } },
+    { name: "Refresh All", action: function() { loadAll(); toast("Refreshing all data", "info"); } },
+    { name: "Go to Setup", action: function() { window.location.href = "/setup"; } },
+    { name: "Go to Control UI", action: function() { window.location.href = "/openclaw"; } },
+    { name: "Go to TUI", action: function() { window.location.href = "/tui"; } },
+  ];
+
+  var paletteVisible = false;
+  var paletteSelectedIdx = 0;
+
+  function showPalette() {
+    paletteVisible = true;
+    document.getElementById("palette-overlay").classList.add("visible");
+    var input = document.getElementById("palette-input");
+    input.value = "";
+    input.focus();
+    renderPaletteResults("");
+  }
+
+  function hidePalette() {
+    paletteVisible = false;
+    document.getElementById("palette-overlay").classList.remove("visible");
+  }
+
+  function renderPaletteResults(query) {
+    var q = query.toLowerCase();
+    var filtered = paletteCommands.filter(function(c) { return c.name.toLowerCase().includes(q); });
+    paletteSelectedIdx = 0;
+    var container = document.getElementById("palette-results");
+    container.innerHTML = filtered.map(function(c, i) {
+      return '<div class="palette-item' + (i === 0 ? " selected" : "") + '" data-idx="' + i + '">' +
+        '<span>' + esc(c.name) + '</span>' +
+        (c.shortcut ? '<span class="shortcut">' + esc(c.shortcut) + '</span>' : '') +
+      '</div>';
+    }).join("");
+    container.querySelectorAll(".palette-item").forEach(function(el) {
+      el.addEventListener("click", function() {
+        var idx = parseInt(el.dataset.idx);
+        filtered[idx].action();
+        hidePalette();
+      });
+    });
+  }
+
+  document.getElementById("palette-input").addEventListener("input", function(e) {
+    renderPaletteResults(e.target.value);
+  });
+
+  document.getElementById("palette-input").addEventListener("keydown", function(e) {
+    var items = document.querySelectorAll(".palette-item");
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      paletteSelectedIdx = Math.min(paletteSelectedIdx + 1, items.length - 1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      paletteSelectedIdx = Math.max(paletteSelectedIdx - 1, 0);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (items[paletteSelectedIdx]) items[paletteSelectedIdx].click();
+      return;
+    } else if (e.key === "Escape") {
+      hidePalette();
+      return;
+    }
+    items.forEach(function(el, i) {
+      el.classList.toggle("selected", i === paletteSelectedIdx);
+    });
+  });
+
+  document.getElementById("palette-overlay").addEventListener("click", function(e) {
+    if (e.target === this) hidePalette();
+  });
+
+  // ── Keyboard Shortcuts ───────────────────────────────────────────────
+  document.addEventListener("keydown", function(e) {
+    // Cmd/Ctrl+K: Command palette
+    if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      e.preventDefault();
+      paletteVisible ? hidePalette() : showPalette();
+      return;
+    }
+    // Ctrl+Shift+T: Toggle theme
+    if (e.ctrlKey && e.shiftKey && e.key === "T") {
+      e.preventDefault();
+      document.getElementById("theme-toggle").click();
+      return;
+    }
+    // Escape: close palette
+    if (e.key === "Escape" && paletteVisible) {
+      hidePalette();
+      return;
+    }
+    // Number keys 1-6 to switch tabs (when not in input)
+    if (!e.metaKey && !e.ctrlKey && !e.altKey && e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") {
+      var tabMap = { "1": "overview", "2": "projects", "3": "models", "4": "skills", "5": "tools", "6": "activity" };
+      if (tabMap[e.key]) { switchTab(tabMap[e.key]); return; }
+    }
+  });
+
+  // ── Load All Data ────────────────────────────────────────────────────
+  function loadAll() {
+    loadOverview();
+    loadProjects();
+    loadModels();
+    loadSkills();
+    loadTools();
+    loadQuota();
+  }
+  loadAll();
 })();
 </script>
 </body>
