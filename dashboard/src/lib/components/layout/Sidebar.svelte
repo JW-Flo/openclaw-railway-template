@@ -68,7 +68,7 @@
   <!-- Logo -->
   <div class="px-5 py-5 border-b border-border">
     <a href="{base}/overview" class="text-lg font-bold text-text">
-      Open<span class="text-accent-2">Claw</span>
+      J<span class="text-accent-2">Claw</span>
     </a>
   </div>
 

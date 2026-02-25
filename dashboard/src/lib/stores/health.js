@@ -10,6 +10,13 @@ export async function loadHealth() {
   healthLoading.set(true);
   try {
     const data = await api.get('/setup/healthz');
+    // Normalize: /setup/healthz returns gatewayRunning (bool) + gatewayStarting (bool)
+    // Convert to a simpler gateway status string for components
+    if (data && !data.gateway) {
+      data.gateway = data.gatewayRunning ? 'running'
+        : data.gatewayStarting ? 'starting'
+        : 'stopped';
+    }
     health.set(data);
   } catch {
     health.set(null);

@@ -17,8 +17,8 @@
 
   async function loadSessions() {
     try {
-      // Try JSON output first
-      const res = await api.post('/setup/api/openclaw-cmd', { args: ['sessions', 'list', '--json'] });
+      // openclaw sessions --json (no 'list' subcommand — it doesn't exist)
+      const res = await api.post('/setup/api/openclaw-cmd', { args: ['sessions', '--json'] });
       const output = (res.output || '').trim();
       if (output) {
         try {
@@ -28,7 +28,6 @@
           rawOutput = '';
           errorMessage = '';
         } catch {
-          // JSON parse failed, show raw output
           sessions = [];
           parseMode = 'raw';
           rawOutput = output;
@@ -41,9 +40,9 @@
         errorMessage = '';
       }
     } catch (e) {
-      // JSON command failed, try plain text fallback
+      // JSON failed, try plain text
       try {
-        const res = await api.post('/setup/api/openclaw-cmd', { args: ['sessions', 'list'] });
+        const res = await api.post('/setup/api/openclaw-cmd', { args: ['sessions'] });
         const output = (res.output || '').trim();
         if (output) {
           sessions = [];
@@ -52,32 +51,15 @@
           errorMessage = '';
         } else {
           sessions = [];
-          parseMode = 'json';
-          rawOutput = '';
-          errorMessage = '';
-        }
-      } catch (e2) {
-        // Both failed, try just 'sessions' to discover
-        try {
-          const res = await api.post('/setup/api/openclaw-cmd', { args: ['sessions'] });
-          const output = (res.output || '').trim();
-          if (output) {
-            sessions = [];
-            parseMode = 'raw';
-            rawOutput = output;
-            errorMessage = '';
-          } else {
-            sessions = [];
-            parseMode = 'error';
-            rawOutput = '';
-            errorMessage = e2.body || e2.message;
-          }
-        } catch (e3) {
-          sessions = [];
           parseMode = 'error';
           rawOutput = '';
-          errorMessage = e3.body || e3.message;
+          errorMessage = e.body || e.message;
         }
+      } catch (e2) {
+        sessions = [];
+        parseMode = 'error';
+        rawOutput = '';
+        errorMessage = e2.body || e2.message;
       }
     } finally {
       loading = false;
@@ -264,7 +246,7 @@
           </svg>
         </div>
         <p class="text-sm text-text-2 mb-4">
-          Session listing may not be available in this OpenClaw version.
+          Session listing may not be available in this JClaw version.
         </p>
         {#if errorMessage}
           <div class="mt-4 text-left">

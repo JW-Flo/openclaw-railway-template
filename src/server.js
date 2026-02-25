@@ -77,6 +77,31 @@ function writeTaskQueue(queue) {
   fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
 }
 
+// ── Activity Log ─────────────────────────────────────────────────────────
+const ACTIVITY_LOG_PATH = path.join(STATE_DIR, "activity-log.json");
+const ACTIVITY_LOG_MAX = 500;
+
+function appendActivity(type, detail) {
+  let log = [];
+  try {
+    log = JSON.parse(fs.readFileSync(ACTIVITY_LOG_PATH, "utf8"));
+    if (!Array.isArray(log)) log = [];
+  } catch { log = []; }
+  log.push({ type, detail, ts: new Date().toISOString() });
+  if (log.length > ACTIVITY_LOG_MAX) log = log.slice(-ACTIVITY_LOG_MAX);
+  try { fs.writeFileSync(ACTIVITY_LOG_PATH, JSON.stringify(log)); } catch (e) {
+    console.warn("[activity-log] write error:", e.message);
+  }
+}
+
+function readActivityLog(limit = 100) {
+  try {
+    const log = JSON.parse(fs.readFileSync(ACTIVITY_LOG_PATH, "utf8"));
+    if (!Array.isArray(log)) return [];
+    return log.slice(-limit);
+  } catch { return []; }
+}
+
 let cachedOpenclawVersion = null;
 let cachedChannelsHelp = null;
 
@@ -366,7 +391,7 @@ function requireSetupAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const [scheme, encoded] = header.split(" ");
   if (scheme !== "Basic" || !encoded) {
-    res.set("WWW-Authenticate", 'Basic realm="OpenClaw Setup"');
+    res.set("WWW-Authenticate", 'Basic realm="JClaw Setup"');
     return res.status(401).send("Auth required");
   }
   const decoded = Buffer.from(encoded, "base64").toString("utf8");
@@ -376,7 +401,7 @@ function requireSetupAuth(req, res, next) {
   const expectedHash = crypto.createHash("sha256").update(SETUP_PASSWORD).digest();
   const isValid = crypto.timingSafeEqual(passwordHash, expectedHash);
   if (!isValid) {
-    res.set("WWW-Authenticate", 'Basic realm="OpenClaw Setup"');
+    res.set("WWW-Authenticate", 'Basic realm="JClaw Setup"');
     return res.status(401).send("Invalid password");
   }
   return next();
@@ -899,6 +924,7 @@ app.post("/setup/api/restart-gateway", requireSetupAuth, async (_req, res) => {
   try {
     gatewayLogs.length = 0;
     await restartGateway();
+    appendActivity("gateway_restart", { success: true });
     return res.json({ ok: true, logs: gatewayLogs.slice(-50) });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message, logs: gatewayLogs.slice(-50) });
@@ -1319,6 +1345,7 @@ app.post("/setup/api/runner/add", requireSetupAuth, (req, res) => {
   // Cap history to prevent unbounded growth
   if (queue.history.length > 500) queue.history = queue.history.slice(-500);
   writeTaskQueue(queue);
+  appendActivity("task_added", { id: task.id, title: task.title, project: task.project });
   return res.json({ ok: true, task });
 });
 
@@ -1423,6 +1450,184 @@ app.post("/setup/api/runner/pause", requireSetupAuth, (req, res) => {
   queue.config.paused = paused;
   writeTaskQueue(queue);
   return res.json({ ok: true, paused: queue.config.paused });
+});
+
+// ── Activity Log API ────────────────────────────────────────────────────
+
+app.get("/setup/api/activity", requireSetupAuth, (req, res) => {
+  const limit = Math.min(Number(req.query?.limit) || 100, 500);
+  return res.json({ ok: true, entries: readActivityLog(limit) });
+});
+
+// ── Runner: Edit task ───────────────────────────────────────────────────
+
+app.post("/setup/api/runner/edit", requireSetupAuth, (req, res) => {
+  const { id, title, description, priority, project } = req.body || {};
+  if (!id) {
+    return res.status(400).json({ ok: false, error: "Missing required field: id" });
+  }
+  const queue = readTaskQueue();
+  const task = queue.tasks.find((t) => t.id === id);
+  if (!task) {
+    return res.status(404).json({ ok: false, error: "Task not found" });
+  }
+  if (typeof title === "string" && title.trim()) task.title = title.slice(0, 500);
+  if (typeof description === "string") task.description = description.slice(0, 5000);
+  if (typeof project === "string") task.project = project.slice(0, 200);
+  if (Number.isInteger(priority) && priority >= 1 && priority <= 10) task.priority = priority;
+  writeTaskQueue(queue);
+  return res.json({ ok: true, task });
+});
+
+// ── Runner: Execute a task now ──────────────────────────────────────────
+
+app.post("/setup/api/runner/run", requireSetupAuth, async (req, res) => {
+  const { id } = req.body || {};
+  if (!id) {
+    return res.status(400).json({ ok: false, error: "Missing required field: id" });
+  }
+  const queue = readTaskQueue();
+  const task = queue.tasks.find((t) => t.id === id);
+  if (!task) {
+    return res.status(404).json({ ok: false, error: "Task not found" });
+  }
+  if (task.status === "running") {
+    return res.status(409).json({ ok: false, error: "Task is already running" });
+  }
+
+  task.status = "running";
+  task.startedAt = new Date().toISOString();
+  writeTaskQueue(queue);
+  appendActivity("task_started", { id: task.id, title: task.title, project: task.project });
+
+  // Run asynchronously so the HTTP response returns immediately
+  const engineCfg = queue.config.engines?.openclaw || {};
+  const timeout = engineCfg.timeout || 180;
+  const projectPath = task.project ? task.project.split("/").pop() : "";
+  const prompt = [
+    task.title,
+    task.description ? `\nDetails: ${task.description}` : "",
+    projectPath ? `\nWork in the ${projectPath} project directory.` : "",
+  ].join("");
+
+  const agentArgs = [
+    "agent", "--session-id", `runner-${task.id.slice(0, 8)}`,
+    "--message", prompt,
+    "--timeout", String(timeout),
+  ];
+
+  runCmd(OPENCLAW_NODE, clawArgs(agentArgs)).then((r) => {
+    const q2 = readTaskQueue();
+    const t2 = q2.tasks.find((t) => t.id === id);
+    if (t2) {
+      t2.status = r.code === 0 ? "completed" : "failed";
+      t2.completedAt = new Date().toISOString();
+      t2.result = (r.output || "").slice(-2000);
+      // Move to history
+      q2.tasks = q2.tasks.filter((t) => t.id !== id);
+      q2.history.push(t2);
+      if (q2.history.length > 500) q2.history = q2.history.slice(-500);
+      writeTaskQueue(q2);
+      appendActivity("task_completed", {
+        id: t2.id, title: t2.title, project: t2.project,
+        status: t2.status, exit: r.code,
+      });
+    }
+  }).catch((err) => {
+    const q2 = readTaskQueue();
+    const t2 = q2.tasks.find((t) => t.id === id);
+    if (t2) {
+      t2.status = "failed";
+      t2.completedAt = new Date().toISOString();
+      t2.result = err.message;
+      q2.tasks = q2.tasks.filter((t) => t.id !== id);
+      q2.history.push(t2);
+      if (q2.history.length > 500) q2.history = q2.history.slice(-500);
+      writeTaskQueue(q2);
+      appendActivity("task_failed", { id: t2.id, title: t2.title, error: err.message });
+    }
+  });
+
+  return res.json({ ok: true, message: "Task execution started", task });
+});
+
+// ── AI-Suggested Tasks ──────────────────────────────────────────────────
+
+app.post("/setup/api/runner/suggest", requireSetupAuth, async (req, res) => {
+  const { project } = req.body || {};
+  try {
+    // Gather context: project status, recent history, workspace files
+    const projectsRes = await runCmd("sh", ["-c", `ls -1 "${WORKSPACE_DIR}" 2>/dev/null`], { cwd: WORKSPACE_DIR });
+    const projects = (projectsRes.output || "").split("\n").filter(Boolean).filter(d => !d.startsWith("."));
+
+    // Filter to requested project or all
+    const targetProjects = project ? projects.filter(p => p === project || p === project.split("/").pop()) : projects;
+
+    // Gather context for each project
+    const contextParts = [];
+    for (const proj of targetProjects.slice(0, 6)) {
+      const projDir = path.join(WORKSPACE_DIR, proj);
+      const parts = [`## Project: ${proj}`];
+      // Read CLAUDE.md if exists
+      try {
+        const claude = fs.readFileSync(path.join(projDir, "CLAUDE.md"), "utf8");
+        parts.push("CLAUDE.md (first 500 chars): " + claude.slice(0, 500));
+      } catch { /* skip */ }
+      // Git log
+      const gitLog = await runCmd("git", ["-C", projDir, "log", "--oneline", "-10"]);
+      if (gitLog.code === 0) parts.push("Recent commits:\n" + gitLog.output.slice(0, 500));
+      // Git status
+      const gitSt = await runCmd("git", ["-C", projDir, "status", "--short"]);
+      if (gitSt.code === 0 && gitSt.output.trim()) parts.push("Dirty files:\n" + gitSt.output.slice(0, 300));
+      // Issues (if gh is available)
+      const issues = await runCmd("gh", ["issue", "list", "-R", `JW-Flo/${proj}`, "--limit", "5", "--json", "title,number,labels"], { cwd: projDir });
+      if (issues.code === 0 && issues.output.trim()) parts.push("Open issues: " + issues.output.slice(0, 500));
+      contextParts.push(parts.join("\n"));
+    }
+
+    // Read workspace soul/identity for personality context
+    let soulContext = "";
+    try { soulContext = fs.readFileSync(path.join(WORKSPACE_DIR, "SOUL.md"), "utf8").slice(0, 300); } catch { /* skip */ }
+    try { soulContext += "\n" + fs.readFileSync(path.join(WORKSPACE_DIR, "MEMORY.md"), "utf8").slice(0, 300); } catch { /* skip */ }
+
+    // Read recent task history
+    const queue = readTaskQueue();
+    const recentHistory = queue.history.slice(-10).map(t => `${t.title} (${t.status})`).join(", ");
+
+    const prompt = [
+      "You are a project manager AI. Based on the following project context, suggest 3-5 high-value tasks.",
+      "Return ONLY valid JSON: an array of objects with: title, description, project (repo name), priority (1-10), estimatedCost (low/medium/high), suggestedModel (e.g. xai/grok-4).",
+      "Focus on: bug fixes, test coverage, features from open issues, documentation, and refactoring.",
+      "Be specific and actionable. Prioritize work that generates value.",
+      "",
+      soulContext ? `Agent personality:\n${soulContext}` : "",
+      recentHistory ? `Recently completed tasks: ${recentHistory}` : "",
+      "",
+      ...contextParts,
+    ].filter(Boolean).join("\n");
+
+    // Use the agent to generate suggestions
+    const agentRes = await runCmd(OPENCLAW_NODE, clawArgs([
+      "agent", "--session-id", "task-suggest",
+      "--message", prompt,
+      "--timeout", "60",
+    ]));
+
+    // Try to parse JSON from the agent output
+    const output = agentRes.output || "";
+    const jsonMatch = output.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      try {
+        const suggestions = JSON.parse(jsonMatch[0]);
+        return res.json({ ok: true, suggestions });
+      } catch { /* fall through */ }
+    }
+
+    // Return raw if JSON parsing fails
+    return res.json({ ok: true, suggestions: [], raw: output.slice(0, 3000) });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 // Serve SvelteKit dashboard build output (static files)
@@ -1657,7 +1862,7 @@ app.use(async (req, res) => {
 <style>body{display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#1a1a2e;color:#e0e0e0;font-family:system-ui,sans-serif}
 .loader{text-align:center}.spinner{width:40px;height:40px;border:3px solid #333;border-top-color:#7c3aed;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 16px}
 @keyframes spin{to{transform:rotate(360deg)}}</style></head>
-<body><div class="loader"><div class="spinner"></div><p>Connecting to OpenClaw…</p></div>
+<body><div class="loader"><div class="spinner"></div><p>Connecting to JClaw…</p></div>
 <script>
 try {
   var KEY = "openclaw.control.settings.v1";
@@ -1668,7 +1873,7 @@ try {
 } catch (e) { console.warn("token bootstrap failed:", e); }
 window.location.replace("/openclaw?_boot=1");
 </script>
-<noscript><a href="/openclaw?_boot=1">Continue to OpenClaw</a></noscript>
+<noscript><a href="/openclaw?_boot=1">Continue to JClaw</a></noscript>
 </body></html>`;
     return res.type("html").send(bootstrapHtml);
   }
@@ -1719,7 +1924,7 @@ server.on("upgrade", async (req, socket, head) => {
     }
 
     if (!verifyTuiAuth(req)) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"OpenClaw TUI\"\r\n\r\n");
+      socket.write("HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"JClaw TUI\"\r\n\r\n");
       socket.destroy();
       return;
     }
