@@ -2852,7 +2852,7 @@ app.get("/setup/api/projects/:name", requireSetupAuth, async (req, res) => {
   try {
     const [branch, log, status, remotes, readme] = await Promise.all([
       runCmd("git", ["-C", projDir, "branch", "--show-current"]),
-      runCmd("git", ["-C", projDir, "log", "--oneline", "--pretty=format:%h|%s|%an|%ar", "-20"]),
+      runCmd("git", ["-C", projDir, "log", "--oneline", "--pretty=format:%h\x1f%s\x1f%an\x1f%ar", "-20"]),
       runCmd("git", ["-C", projDir, "status", "--short"]),
       runCmd("git", ["-C", projDir, "remote", "-v"]),
       new Promise(resolve => {
@@ -2870,9 +2870,9 @@ app.get("/setup/api/projects/:name", requireSetupAuth, async (req, res) => {
         .sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1);
     } catch { /* skip */ }
 
-    // Parse commits
+    // Parse commits (using unit separator \x1f to avoid conflicts with pipe in commit messages)
     const commits = (log.output || "").split("\n").filter(Boolean).map(line => {
-      const [hash, message, author, time] = line.split("|");
+      const [hash, message, author, time] = line.split("\x1f");
       return { hash, message, author, time };
     });
 
@@ -2946,9 +2946,10 @@ app.post("/setup/api/projects/:name/action", requireSetupAuth, async (req, res) 
 app.get("/setup/api/projects/:name/file", requireSetupAuth, (req, res) => {
   const projName = req.params.name.replace(/[^a-zA-Z0-9_.-]/g, "");
   const filePath = req.query.path || "";
+  const projectBase = path.resolve(path.join(WORKSPACE_DIR, projName)) + path.sep;
   const fullPath = path.resolve(path.join(WORKSPACE_DIR, projName, filePath));
-  // Ensure path is within project
-  if (!fullPath.startsWith(path.join(WORKSPACE_DIR, projName))) {
+  // Ensure path is within project (trailing separator prevents prefix collisions like proj vs proj-evil)
+  if (!fullPath.startsWith(projectBase) && fullPath !== projectBase.slice(0, -1)) {
     return res.status(403).json({ ok: false, error: "Path traversal blocked" });
   }
   if (!fs.existsSync(fullPath)) return res.status(404).json({ ok: false, error: "Not found" });
@@ -2971,19 +2972,28 @@ app.get("/setup/api/projects/:name/file", requireSetupAuth, (req, res) => {
 
 const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET?.trim() || "";
 
-app.post("/webhooks/github", express.raw({ type: "application/json" }), async (req, res) => {
-  // Verify webhook signature if secret is configured
-  if (WEBHOOK_SECRET) {
-    const sig = req.headers["x-hub-signature-256"] || "";
-    const body = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
-    const expected = "sha256=" + crypto.createHmac("sha256", WEBHOOK_SECRET).update(body).digest("hex");
-    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
-      return res.status(401).json({ ok: false, error: "Invalid signature" });
-    }
+app.post("/webhooks/github", async (req, res) => {
+  // Require webhook secret in production to prevent unauthenticated git pulls
+  if (!WEBHOOK_SECRET) {
+    return res.status(503).json({ ok: false, error: "GITHUB_WEBHOOK_SECRET not configured" });
+  }
+
+  // Verify webhook signature (body is already parsed by express.json())
+  const sig = req.headers["x-hub-signature-256"] || "";
+  if (!sig) {
+    return res.status(401).json({ ok: false, error: "Missing signature header" });
+  }
+  // Reconstruct the body as GitHub would have sent it
+  const rawBody = JSON.stringify(req.body);
+  const expected = "sha256=" + crypto.createHmac("sha256", WEBHOOK_SECRET).update(rawBody).digest("hex");
+  const sigBuf = Buffer.from(sig);
+  const expectedBuf = Buffer.from(expected);
+  if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+    return res.status(401).json({ ok: false, error: "Invalid signature" });
   }
 
   const event = req.headers["x-github-event"];
-  const payload = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+  const payload = req.body;
 
   if (event === "push") {
     const repo = payload.repository?.full_name;
@@ -3166,7 +3176,7 @@ app.get("/setup/api/alerts/config", requireSetupAuth, (_req, res) => {
   return res.json({ ok: true, config: readAlertConfig() });
 });
 
-app.post("/setup/api/alerts/config", requireSetupAuth, (req, res) => {
+app.post("/setup/api/alerts/config", requireDashAuth, (req, res) => {
   const config = readAlertConfig();
   const { telegram, rules, cooldownMinutes } = req.body || {};
   if (telegram && typeof telegram === "object") {
@@ -3183,13 +3193,13 @@ app.post("/setup/api/alerts/config", requireSetupAuth, (req, res) => {
   return res.json({ ok: true, config });
 });
 
-app.post("/setup/api/alerts/test", requireSetupAuth, async (req, res) => {
+app.post("/setup/api/alerts/test", requireDashAuth, async (req, res) => {
   await sendTelegramAlert("🧪 *Test Alert* from JClaw Dashboard\nIf you see this, alerts are working!");
   return res.json({ ok: true });
 });
 
 // User quota info
-app.get("/setup/api/quota", requireSetupAuth, (req, res) => {
+app.get("/setup/api/quota", requireDashAuth, (req, res) => {
   const user = req.dashUser;
   const quotas = ROLE_MODEL_QUOTAS[user.role] || ROLE_MODEL_QUOTAS["limited-read"];
   const usage = getUserUsageToday(user.id);
@@ -3202,14 +3212,14 @@ app.get("/setup/api/quota", requireSetupAuth, (req, res) => {
 });
 
 // All users' usage (owner only)
-app.get("/setup/api/usage", requireSetupAuth, (req, res) => {
+app.get("/setup/api/usage", requireDashAuth, (req, res) => {
   if (req.dashUser.role !== "owner") return res.status(403).json({ ok: false, error: "Owner only" });
   const usage = readUserUsage();
   return res.json({ ok: true, ...usage });
 });
 
 // Real-time SSE event stream
-app.get("/setup/api/events", requireSetupAuth, (req, res) => {
+app.get("/setup/api/events", requireDashAuth, (req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -3401,7 +3411,7 @@ app.post("/setup/api/runner/suggest", requireSetupAuth, async (req, res) => {
 
 // ── Chat API (SSE streaming) ────────────────────────────────────────────
 
-app.post("/setup/api/chat/send", requireSetupAuth, (req, res) => {
+app.post("/setup/api/chat/send", requireDashAuth, (req, res) => {
   const { message, sessionId, model } = req.body || {};
   if (!message || typeof message !== "string" || !message.trim()) {
     return res.status(400).json({ ok: false, error: "Missing message" });

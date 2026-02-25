@@ -658,7 +658,14 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
 
   // ── Real-time SSE ────────────────────────────────────────────────────
   var eventSource = null;
+  var sseReconnectTimer = null;
   function connectSSE() {
+    // Close any existing connection before reconnecting
+    if (eventSource) {
+      try { eventSource.close(); } catch { /* ignore */ }
+      eventSource = null;
+    }
+    if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer = null; }
     try {
       eventSource = new EventSource("/setup/api/events");
       eventSource.addEventListener("activity", function(e) {
@@ -689,8 +696,10 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
         loadProjects();
       });
       eventSource.onerror = function() {
-        // Reconnect after 5s
-        setTimeout(connectSSE, 5000);
+        // Close current and reconnect after 5s (avoid stacking connections)
+        try { eventSource.close(); } catch { /* ignore */ }
+        eventSource = null;
+        sseReconnectTimer = setTimeout(connectSSE, 5000);
       };
     } catch { /* SSE not supported */ }
   }
