@@ -1099,7 +1099,7 @@ app.post("/setup/api/skills/uninstall", requireSetupAuth, async (req, res) => {
   if (!name || typeof name !== "string") {
     return res.status(400).json({ ok: false, error: "Missing skill name" });
   }
-  const r = await runCmd("npx", ["clawhub@latest", "uninstall", name.trim(), "--no-input", "--workdir", WORKSPACE_DIR]);
+  const r = await runCmd("clawhub", ["uninstall", name.trim(), "--no-input", "--workdir", WORKSPACE_DIR]);
   return res.json({ ok: r.code === 0, output: r.output });
 });
 

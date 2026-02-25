@@ -546,7 +546,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     const tbody = document.getElementById("skills-tbody");
     tbody.innerHTML = '<tr class="loading-row"><td colspan="3"><span class="spinner"></span> Loading...</td></tr>';
     try {
-      const data = await api("GET", "/setup/api/skills/eligible");
+      const data = await api("GET", "/setup/api/skills/list");
       const output = data.output || "";
       // Parse table rows from openclaw skills list output
       // Format: "│ ✓ ready  │ name │ description │ source │"
