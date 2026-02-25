@@ -16,11 +16,14 @@
 
   // Session detail
   let selectedSession = $state(null);
+  let sessionDetail = $state(null);
+  let detailLoading = $state(false);
   let chatMessages = $state([]);
   let chatInput = $state('');
   let sending = $state(false);
   let chatScrollEl = $state(null);
   let streamingText = $state('');
+  let terminating = $state(null);
 
   // New session
   let newSessionId = $state('');
@@ -99,6 +102,17 @@
     return count !== undefined && count !== null ? String(count) : '--';
   }
 
+  function getSessionModel(session) {
+    return session.model || session.agentModel || session.agent_model || null;
+  }
+
+  function getSessionTokens(session) {
+    const inp = session.inputTokens || session.input_tokens || session.tokensIn || 0;
+    const out = session.outputTokens || session.output_tokens || session.tokensOut || 0;
+    if (!inp && !out) return null;
+    return { input: inp, output: out, total: inp + out };
+  }
+
   function getStatusVariant(status) {
     if (!status) return 'default';
     const lower = String(status).toLowerCase();
@@ -120,12 +134,26 @@
     } catch { return dateStr; }
   }
 
-  function selectSession(session) {
+  function formatTokens(n) {
+    if (!n) return '0';
+    if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+    if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+    return String(n);
+  }
+
+  async function selectSession(session) {
     const id = getSessionId(session);
     selectedSession = { ...session, _id: id };
     chatMessages = [];
     chatInput = '';
     streamingText = '';
+    // Load session detail
+    detailLoading = true;
+    try {
+      const res = await api.get(`/setup/api/sessions/detail?id=${encodeURIComponent(id)}`);
+      sessionDetail = res;
+    } catch { sessionDetail = null; }
+    detailLoading = false;
   }
 
   function startNewSession() {
@@ -134,14 +162,29 @@
     chatMessages = [];
     chatInput = '';
     streamingText = '';
+    sessionDetail = null;
     showNewSession = false;
     newSessionId = '';
   }
 
   function closeDetail() {
     selectedSession = null;
+    sessionDetail = null;
     chatMessages = [];
     streamingText = '';
+  }
+
+  async function terminateSession(sessionId) {
+    terminating = sessionId;
+    try {
+      await api.post('/setup/api/sessions/terminate', { sessionId });
+      success(`Session ${sessionId} terminated`);
+      await loadSessions();
+      if (selectedSession?._id === sessionId) closeDetail();
+    } catch (err) {
+      notifyError('Terminate failed: ' + (err.body || err.message));
+    }
+    terminating = null;
   }
 
   async function scrollToBottom() {
@@ -187,10 +230,6 @@
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            const event = line.slice(7);
-            continue;
-          }
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6));
@@ -199,7 +238,6 @@
                 await scrollToBottom();
               }
               if (data.code !== undefined) {
-                // Done
                 if (streamingText.trim()) {
                   chatMessages = [...chatMessages, {
                     role: 'assistant',
@@ -211,7 +249,6 @@
                 streamingText = '';
               }
               if (data.message && !data.text) {
-                // Error event
                 chatMessages = [...chatMessages, {
                   role: 'system',
                   content: `Error: ${data.message}`,
@@ -224,7 +261,6 @@
         }
       }
 
-      // Flush any remaining streaming text
       if (streamingText.trim()) {
         chatMessages = [...chatMessages, {
           role: 'assistant',
@@ -289,7 +325,13 @@
       {/if}
     </div>
     <div class="flex items-center gap-2">
-      {#if !selectedSession}
+      {#if selectedSession}
+        <Button variant="danger" size="sm"
+          loading={terminating === selectedSession._id}
+          onclick={() => terminateSession(selectedSession._id)}>
+          Terminate
+        </Button>
+      {:else}
         <Button variant="primary" onclick={() => showNewSession = true}>
           <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -304,7 +346,59 @@
   </div>
 
   {#if selectedSession}
-    <!-- ═══════ SESSION DETAIL VIEW (Chat Interface) ═══════ -->
+    <!-- ═══════ SESSION DETAIL VIEW ═══════ -->
+
+    <!-- Session Info Panel -->
+    {#if sessionDetail || detailLoading}
+      <div class="bg-surface border border-border rounded-xl p-3 mb-3 flex-shrink-0">
+        {#if detailLoading}
+          <div class="flex items-center gap-2 text-xs text-text-3">
+            <Spinner size="sm" /> Loading session details...
+          </div>
+        {:else if sessionDetail?.session}
+          <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 text-xs">
+            <div>
+              <span class="text-text-3 block">Status</span>
+              <Badge variant={getStatusVariant(getSessionStatus(sessionDetail.session))}>
+                {getSessionStatus(sessionDetail.session)}
+              </Badge>
+            </div>
+            <div>
+              <span class="text-text-3 block">Created</span>
+              <span class="text-text">{formatDate(getSessionCreated(sessionDetail.session))}</span>
+            </div>
+            <div>
+              <span class="text-text-3 block">Messages</span>
+              <span class="text-text font-mono">{getSessionMessages(sessionDetail.session)}</span>
+            </div>
+            {#if getSessionModel(sessionDetail.session)}
+              <div>
+                <span class="text-text-3 block">Model</span>
+                <span class="text-text font-mono text-[11px]">{getSessionModel(sessionDetail.session)}</span>
+              </div>
+            {/if}
+            {#if getSessionTokens(sessionDetail.session)}
+              <div>
+                <span class="text-text-3 block">Tokens In</span>
+                <span class="text-text font-mono">{formatTokens(getSessionTokens(sessionDetail.session).input)}</span>
+              </div>
+              <div>
+                <span class="text-text-3 block">Tokens Out</span>
+                <span class="text-text font-mono">{formatTokens(getSessionTokens(sessionDetail.session).output)}</span>
+              </div>
+            {/if}
+          </div>
+          {#if sessionDetail.session.lastMessage || sessionDetail.session.last_message}
+            <div class="mt-2 pt-2 border-t border-border/50">
+              <span class="text-text-3 text-[10px] uppercase tracking-wider">Last Activity</span>
+              <p class="text-xs text-text-2 mt-0.5 truncate">{sessionDetail.session.lastMessage || sessionDetail.session.last_message}</p>
+            </div>
+          {/if}
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Chat Interface -->
     <div class="flex-1 flex flex-col min-h-0 bg-surface border border-border rounded-xl overflow-hidden">
       <!-- Chat messages area -->
       <div
@@ -372,7 +466,6 @@
           </div>
         {/if}
 
-        <!-- Sending indicator (before streaming starts) -->
         {#if sending && !streamingText}
           <div class="flex justify-start">
             <div class="bg-surface-2 border border-border rounded-2xl rounded-bl-md px-4 py-3">
@@ -456,36 +549,62 @@
       {:else}
         <div class="grid gap-3">
           {#each sessions as session}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div
-              class="bg-surface border border-border rounded-xl p-4 cursor-pointer
-                hover:border-accent/30 hover:bg-surface-2/30 transition-all duration-150 group"
-              onclick={() => selectSession(session)}
-            >
+            <div class="bg-surface border border-border rounded-xl p-4
+              hover:border-accent/30 hover:bg-surface-2/30 transition-all duration-150 group">
               <div class="flex items-center justify-between gap-4">
-                <div class="flex items-center gap-3 min-w-0 flex-1">
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="flex items-center gap-3 min-w-0 flex-1 cursor-pointer"
+                  onclick={() => selectSession(session)}>
                   <div class="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center flex-shrink-0
                     group-hover:bg-accent/20 transition-colors duration-150">
                     <svg class="w-4 h-4 text-accent-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z" />
                     </svg>
                   </div>
-                  <div class="min-w-0">
+                  <div class="min-w-0 flex-1">
                     <p class="font-mono text-sm text-text truncate">{getSessionId(session)}</p>
-                    <p class="text-xs text-text-3 mt-0.5">{formatDate(getSessionCreated(session))}</p>
+                    <div class="flex items-center gap-3 mt-0.5">
+                      <span class="text-xs text-text-3">{formatDate(getSessionCreated(session))}</span>
+                      {#if getSessionModel(session)}
+                        <span class="text-[10px] font-mono text-accent-2/70">{getSessionModel(session)}</span>
+                      {/if}
+                    </div>
                   </div>
                 </div>
                 <div class="flex items-center gap-3 flex-shrink-0">
+                  {#if getSessionTokens(session)}
+                    <span class="text-[10px] text-text-3 font-mono hidden sm:block">
+                      {formatTokens(getSessionTokens(session).total)} tok
+                    </span>
+                  {/if}
                   {#if getSessionMessages(session) !== '--'}
                     <span class="text-xs text-text-3">{getSessionMessages(session)} msgs</span>
                   {/if}
                   <Badge variant={getStatusVariant(getSessionStatus(session))}>
                     {getSessionStatus(session)}
                   </Badge>
-                  <svg class="w-4 h-4 text-text-3 group-hover:text-accent-2 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-                  </svg>
+                  <button
+                    class="text-xs text-danger/50 hover:text-danger transition-colors cursor-pointer p-1 rounded hover:bg-danger/10"
+                    title="Terminate session"
+                    disabled={terminating === getSessionId(session)}
+                    onclick={() => terminateSession(getSessionId(session))}
+                  >
+                    {#if terminating === getSessionId(session)}
+                      <Spinner size="sm" />
+                    {:else}
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    {/if}
+                  </button>
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <div class="cursor-pointer" onclick={() => selectSession(session)}>
+                    <svg class="w-4 h-4 text-text-3 group-hover:text-accent-2 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                    </svg>
+                  </div>
                 </div>
               </div>
             </div>

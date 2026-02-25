@@ -60,6 +60,13 @@
   let addingModel = $state(null);
   let blockingModel = $state(null);
 
+  // Users management
+  let usersLoading = $state(true);
+  let users = $state([]);
+  let showCreateUser = $state(false);
+  let creatingUser = $state(false);
+  let newUser = $state({ username: '', password: '', role: 'read', displayName: '' });
+
   // Debug info
   let debugLoading = $state(true);
   let debugInfo = $state(null);
@@ -302,6 +309,59 @@
     blockingModel = null;
   }
 
+  async function loadUsers() {
+    usersLoading = true;
+    try {
+      const res = await api.get('/setup/api/users');
+      users = res.users || [];
+    } catch { users = []; }
+    usersLoading = false;
+  }
+
+  async function createUser() {
+    if (!newUser.username.trim() || !newUser.password) return;
+    creatingUser = true;
+    try {
+      await api.post('/setup/api/users/create', {
+        username: newUser.username.trim(),
+        password: newUser.password,
+        role: newUser.role,
+        displayName: newUser.displayName.trim() || newUser.username.trim(),
+      });
+      success('User created');
+      newUser = { username: '', password: '', role: 'read', displayName: '' };
+      showCreateUser = false;
+      await loadUsers();
+    } catch (err) {
+      notifyError('Create failed: ' + (err.body || err.message));
+    }
+    creatingUser = false;
+  }
+
+  async function updateUserRole(id, role) {
+    try {
+      await api.post('/setup/api/users/update', { id, role });
+      success('Role updated');
+      await loadUsers();
+    } catch (err) { notifyError('Failed: ' + (err.body || err.message)); }
+  }
+
+  async function toggleUserEnabled(id, enabled) {
+    try {
+      await api.post('/setup/api/users/update', { id, enabled });
+      success(enabled ? 'User enabled' : 'User disabled');
+      await loadUsers();
+    } catch (err) { notifyError('Failed: ' + (err.body || err.message)); }
+  }
+
+  async function deleteUser(id) {
+    try {
+      await api.post('/setup/api/users/delete', { id });
+      success('User deleted');
+      await loadUsers();
+    } catch (err) { notifyError('Failed: ' + (err.body || err.message)); }
+  }
+
   function formatCtx(len) {
     if (!len) return '?';
     if (len >= 1000000) return `${(len / 1000000).toFixed(1)}M`;
@@ -315,6 +375,7 @@
     { id: 'tokens', label: 'API Tokens', icon: 'key' },
     { id: 'runner', label: 'Runner', icon: 'cog' },
     { id: 'ticker', label: 'Ticker', icon: 'ticker' },
+    { id: 'users', label: 'Users', icon: 'users' },
     { id: 'debug', label: 'Debug', icon: 'bug' },
   ];
 
@@ -325,6 +386,7 @@
     if (id === 'tokens' && tokens.length === 0) loadTokens();
     if (id === 'runner' && !runnerConfig.maxConcurrent) loadRunnerConfig();
     if (id === 'ticker' && tickerLoading) loadTickerConfig();
+    if (id === 'users' && users.length === 0) loadUsers();
     if (id === 'debug' && !debugInfo) loadDebug();
   }
 
@@ -371,6 +433,10 @@
         {:else if tab.icon === 'scheduler'}
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        {:else if tab.icon === 'users'}
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
           </svg>
         {:else if tab.icon === 'bug'}
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
@@ -1137,6 +1203,147 @@
 
         <div class="flex justify-end">
           <Button variant="primary" loading={tickerSaving} onclick={saveTickerConfig}>Save Ticker Settings</Button>
+        </div>
+      </div>
+    {/if}
+
+  <!-- ═══════ USERS / IAM TAB ═══════ -->
+  {:else if activeTab === 'users'}
+    <div class="space-y-6">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-lg font-semibold text-text">Identity & Access Management</h2>
+          <p class="text-xs text-text-3 mt-0.5">Manage dashboard users and their permissions</p>
+        </div>
+        <Button variant="primary" size="sm" onclick={() => showCreateUser = true}>
+          <svg class="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+          </svg>
+          Add User
+        </Button>
+      </div>
+
+      <!-- Role legend -->
+      <div class="bg-accent/5 border border-accent/20 rounded-xl p-3">
+        <h3 class="text-xs font-semibold text-accent-2 mb-2">Role Permissions</h3>
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px]">
+          <div><Badge variant="default">Limited Read</Badge> <span class="text-text-3 ml-1">Overview, Projects, Models only</span></div>
+          <div><Badge variant="info">Read</Badge> <span class="text-text-3 ml-1">View all pages</span></div>
+          <div><Badge variant="info">Read & Write</Badge> <span class="text-text-3 ml-1">View + edit projects, sessions, runner</span></div>
+          <div><Badge variant="warning">Admin</Badge> <span class="text-text-3 ml-1">Manage skills, tools, models, scheduler</span></div>
+          <div><Badge variant="danger">Super Admin</Badge> <span class="text-text-3 ml-1">Gateway, config, all management</span></div>
+          <div><Badge variant="success">Owner</Badge> <span class="text-text-3 ml-1">Full access, all permissions</span></div>
+        </div>
+      </div>
+
+      <!-- User list -->
+      {#if usersLoading}
+        <div class="flex justify-center py-8"><Spinner size="lg" /></div>
+      {:else}
+        <div class="space-y-2">
+          {#each users as u}
+            <div class="bg-surface border border-border rounded-xl p-4 {!u.enabled ? 'opacity-50' : ''}">
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex items-center gap-3 min-w-0">
+                  <div class="w-9 h-9 rounded-full bg-accent/10 flex items-center justify-center flex-shrink-0 text-accent-2 text-sm font-bold">
+                    {(u.displayName || u.username || '?')[0].toUpperCase()}
+                  </div>
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span class="font-semibold text-sm text-text">{u.displayName || u.username}</span>
+                      <span class="text-[10px] font-mono text-text-3">@{u.username}</span>
+                    </div>
+                    <div class="flex items-center gap-2 mt-0.5">
+                      <select
+                        value={u.role}
+                        onchange={(e) => updateUserRole(u.id, e.target.value)}
+                        class="bg-bg border border-border rounded-lg px-2 py-0.5 text-[11px] text-text focus:outline-none focus:border-accent/50 cursor-pointer"
+                      >
+                        <option value="limited-read">Limited Read</option>
+                        <option value="read">Read</option>
+                        <option value="read-write">Read & Write</option>
+                        <option value="admin">Admin</option>
+                        <option value="super-admin">Super Admin</option>
+                        <option value="owner">Owner</option>
+                      </select>
+                      {#if u.lastLoginAt}
+                        <span class="text-[10px] text-text-3">Last login: {formatDate(u.lastLoginAt)}</span>
+                      {:else}
+                        <span class="text-[10px] text-text-3">Never logged in</span>
+                      {/if}
+                    </div>
+                  </div>
+                </div>
+                <div class="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    class="text-xs text-text-3 hover:text-text cursor-pointer"
+                    onclick={() => toggleUserEnabled(u.id, !u.enabled)}
+                  >{u.enabled ? 'Disable' : 'Enable'}</button>
+                  {#if u.username !== 'owner'}
+                    <button
+                      class="text-xs text-danger/70 hover:text-danger cursor-pointer"
+                      onclick={() => deleteUser(u.id)}
+                    >Delete</button>
+                  {/if}
+                </div>
+              </div>
+            </div>
+          {/each}
+        </div>
+
+        {#if users.length === 0}
+          <div class="text-center py-8 text-text-3 text-sm">No users found</div>
+        {/if}
+      {/if}
+
+      <div class="flex justify-end">
+        <Button variant="secondary" onclick={loadUsers}>Refresh</Button>
+      </div>
+    </div>
+
+    <!-- Create User Dialog -->
+    {#if showCreateUser}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+        onclick={(e) => { if (e.target === e.currentTarget) showCreateUser = false; }}>
+        <div class="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-sm" style="animation: fadeIn 0.15s ease;">
+          <div class="px-6 py-4 border-b border-border">
+            <h2 class="text-lg font-semibold text-text">Add User</h2>
+          </div>
+          <div class="px-6 py-4 space-y-3">
+            <div>
+              <label class="text-xs text-text-3 block mb-1">Username</label>
+              <input bind:value={newUser.username} placeholder="johndoe"
+                class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text placeholder-text-3 focus:outline-none focus:border-accent/50" />
+            </div>
+            <div>
+              <label class="text-xs text-text-3 block mb-1">Display Name</label>
+              <input bind:value={newUser.displayName} placeholder="John Doe"
+                class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text placeholder-text-3 focus:outline-none focus:border-accent/50" />
+            </div>
+            <div>
+              <label class="text-xs text-text-3 block mb-1">Password</label>
+              <input bind:value={newUser.password} type="password" placeholder="strong password"
+                class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text placeholder-text-3 focus:outline-none focus:border-accent/50" />
+            </div>
+            <div>
+              <label class="text-xs text-text-3 block mb-1">Role</label>
+              <select bind:value={newUser.role}
+                class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/50">
+                <option value="limited-read">Limited Read</option>
+                <option value="read">Read</option>
+                <option value="read-write">Read & Write</option>
+                <option value="admin">Admin</option>
+                <option value="super-admin">Super Admin</option>
+                <option value="owner">Owner</option>
+              </select>
+            </div>
+          </div>
+          <div class="px-6 py-4 border-t border-border flex justify-end gap-2">
+            <Button variant="ghost" onclick={() => showCreateUser = false}>Cancel</Button>
+            <Button variant="primary" loading={creatingUser} onclick={createUser}>Create User</Button>
+          </div>
         </div>
       </div>
     {/if}

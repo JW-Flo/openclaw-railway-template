@@ -452,6 +452,122 @@ function validateApiToken(token) {
   return tokens.find(t => t.token === token && !t.revoked);
 }
 
+// ── Dashboard User/RBAC System ──────────────────────────────────────────
+const USERS_PATH = path.join(STATE_DIR, "dashboard-users.json");
+
+const ROLES = {
+  "limited-read": { level: 1, label: "Limited Read", permissions: ["view:overview", "view:projects", "view:models"] },
+  "read": { level: 2, label: "Read", permissions: ["view:overview", "view:projects", "view:models", "view:skills", "view:tools", "view:sessions", "view:runner", "view:cron", "view:reports"] },
+  "read-write": { level: 3, label: "Read & Write", permissions: ["view:*", "edit:projects", "edit:runner", "edit:sessions", "edit:cron"] },
+  "admin": { level: 4, label: "Admin", permissions: ["view:*", "edit:*", "manage:skills", "manage:tools", "manage:models", "manage:scheduler"] },
+  "super-admin": { level: 5, label: "Super Admin", permissions: ["view:*", "edit:*", "manage:*", "admin:gateway", "admin:config"] },
+  "owner": { level: 6, label: "Owner", permissions: ["*"] },
+};
+
+function readUsers() {
+  try {
+    const data = JSON.parse(fs.readFileSync(USERS_PATH, "utf8"));
+    if (!data.users || !Array.isArray(data.users)) throw new Error("invalid");
+    return data;
+  } catch {
+    // Create default owner using SETUP_PASSWORD
+    const defaults = {
+      users: [{
+        id: crypto.randomUUID(),
+        username: "owner",
+        passwordHash: crypto.createHash("sha256").update(SETUP_PASSWORD || "admin").digest("hex"),
+        role: "owner",
+        displayName: "Joe",
+        createdAt: new Date().toISOString(),
+        lastLoginAt: null,
+        enabled: true,
+      }],
+      sessions: [],
+    };
+    fs.writeFileSync(USERS_PATH, JSON.stringify(defaults, null, 2));
+    return defaults;
+  }
+}
+
+function writeUsers(data) {
+  fs.writeFileSync(USERS_PATH, JSON.stringify(data, null, 2));
+}
+
+function authenticateUser(username, password) {
+  const data = readUsers();
+  const hash = crypto.createHash("sha256").update(password).digest("hex");
+  return data.users.find(u => u.username === username && u.passwordHash === hash && u.enabled);
+}
+
+function createSession(userId) {
+  const data = readUsers();
+  const token = `jclaw_dash_${crypto.randomBytes(24).toString("hex")}`;
+  const session = {
+    token,
+    userId,
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+  };
+  data.sessions = (data.sessions || []).filter(s => new Date(s.expiresAt) > new Date());
+  data.sessions.push(session);
+  writeUsers(data);
+  return token;
+}
+
+function validateSession(token) {
+  if (!token) return null;
+  const data = readUsers();
+  const session = (data.sessions || []).find(s => s.token === token && new Date(s.expiresAt) > new Date());
+  if (!session) return null;
+  const user = data.users.find(u => u.id === session.userId && u.enabled);
+  if (!user) return null;
+  return { ...user, sessionToken: token };
+}
+
+function userHasPermission(user, permission) {
+  if (!user) return false;
+  const role = ROLES[user.role];
+  if (!role) return false;
+  if (role.permissions.includes("*")) return true;
+  if (role.permissions.includes(permission)) return true;
+  const [action] = permission.split(":");
+  return role.permissions.includes(`${action}:*`);
+}
+
+// Middleware: require dashboard session OR fall back to Basic auth (owner level)
+function requireDashAuth(req, res, next) {
+  // Check for dashboard session token (cookie or header)
+  const cookieToken = (req.headers.cookie || "").split(";").map(c => c.trim()).find(c => c.startsWith("jclaw_session="));
+  const sessionToken = cookieToken ? cookieToken.split("=")[1] : req.headers["x-dashboard-token"];
+  const user = validateSession(sessionToken);
+  if (user) {
+    req.dashUser = user;
+    return next();
+  }
+  // Fall back to Basic auth (treated as owner)
+  const header = req.headers.authorization || "";
+  const [scheme, encoded] = header.split(" ");
+  if (scheme === "Basic" && encoded) {
+    const decoded = Buffer.from(encoded, "base64").toString("utf8");
+    const idx = decoded.indexOf(":");
+    const password = idx >= 0 ? decoded.slice(idx + 1) : "";
+    if (SETUP_PASSWORD && password === SETUP_PASSWORD) {
+      req.dashUser = { id: "basic-auth", username: "owner", role: "owner", displayName: "Owner" };
+      return next();
+    }
+  }
+  return res.status(401).json({ ok: false, error: "Authentication required", loginUrl: "/dashboard/login" });
+}
+
+function requirePermission(permission) {
+  return (req, res, next) => {
+    if (!userHasPermission(req.dashUser, permission)) {
+      return res.status(403).json({ ok: false, error: "Insufficient permissions" });
+    }
+    return next();
+  };
+}
+
 let cachedOpenclawVersion = null;
 let cachedChannelsHelp = null;
 
@@ -2242,6 +2358,333 @@ function startAutoScanner() {
 function stopAutoScanner() {
   if (scannerTimer) { clearInterval(scannerTimer); scannerTimer = null; }
 }
+
+// ── Dashboard Auth API ──────────────────────────────────────────────────
+
+app.post("/setup/api/auth/login", (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) {
+    return res.status(400).json({ ok: false, error: "Username and password required" });
+  }
+  const user = authenticateUser(username, password);
+  if (!user) {
+    return res.status(401).json({ ok: false, error: "Invalid credentials" });
+  }
+  const token = createSession(user.id);
+  // Update last login
+  const data = readUsers();
+  const u = data.users.find(uu => uu.id === user.id);
+  if (u) { u.lastLoginAt = new Date().toISOString(); writeUsers(data); }
+
+  res.cookie("jclaw_session", token, {
+    httpOnly: true,
+    secure: req.secure || req.headers["x-forwarded-proto"] === "https",
+    sameSite: "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+    path: "/",
+  });
+  return res.json({
+    ok: true,
+    user: { id: user.id, username: user.username, role: user.role, displayName: user.displayName },
+    token,
+  });
+});
+
+app.post("/setup/api/auth/logout", (req, res) => {
+  const cookieToken = (req.headers.cookie || "").split(";").map(c => c.trim()).find(c => c.startsWith("jclaw_session="));
+  const token = cookieToken ? cookieToken.split("=")[1] : null;
+  if (token) {
+    const data = readUsers();
+    data.sessions = (data.sessions || []).filter(s => s.token !== token);
+    writeUsers(data);
+  }
+  res.clearCookie("jclaw_session", { path: "/" });
+  return res.json({ ok: true });
+});
+
+app.get("/setup/api/auth/me", (req, res) => {
+  const cookieToken = (req.headers.cookie || "").split(";").map(c => c.trim()).find(c => c.startsWith("jclaw_session="));
+  const token = cookieToken ? cookieToken.split("=")[1] : req.headers["x-dashboard-token"];
+  const user = validateSession(token);
+  if (!user) {
+    // Check Basic auth fallback
+    const header = req.headers.authorization || "";
+    const [scheme, encoded] = header.split(" ");
+    if (scheme === "Basic" && encoded) {
+      const decoded = Buffer.from(encoded, "base64").toString("utf8");
+      const idx = decoded.indexOf(":");
+      const password = idx >= 0 ? decoded.slice(idx + 1) : "";
+      if (SETUP_PASSWORD && password === SETUP_PASSWORD) {
+        return res.json({ ok: true, user: { id: "basic-auth", username: "owner", role: "owner", displayName: "Owner" }, authMethod: "basic" });
+      }
+    }
+    return res.status(401).json({ ok: false, error: "Not authenticated" });
+  }
+  return res.json({ ok: true, user: { id: user.id, username: user.username, role: user.role, displayName: user.displayName }, authMethod: "session" });
+});
+
+app.get("/setup/api/auth/roles", requireSetupAuth, (_req, res) => {
+  return res.json({ ok: true, roles: Object.entries(ROLES).map(([id, r]) => ({ id, ...r })) });
+});
+
+// User management (admin+)
+app.get("/setup/api/users", requireSetupAuth, (_req, res) => {
+  const data = readUsers();
+  return res.json({
+    ok: true,
+    users: data.users.map(u => ({
+      id: u.id, username: u.username, role: u.role, displayName: u.displayName,
+      enabled: u.enabled, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt,
+    })),
+  });
+});
+
+app.post("/setup/api/users/create", requireSetupAuth, (req, res) => {
+  const { username, password, role, displayName } = req.body || {};
+  if (!username || !password) return res.status(400).json({ ok: false, error: "username and password required" });
+  if (!ROLES[role]) return res.status(400).json({ ok: false, error: "Invalid role" });
+  const data = readUsers();
+  if (data.users.find(u => u.username === username)) {
+    return res.status(409).json({ ok: false, error: "Username already exists" });
+  }
+  const newUser = {
+    id: crypto.randomUUID(),
+    username: username.trim().slice(0, 50),
+    passwordHash: crypto.createHash("sha256").update(password).digest("hex"),
+    role,
+    displayName: (displayName || username).trim().slice(0, 100),
+    createdAt: new Date().toISOString(),
+    lastLoginAt: null,
+    enabled: true,
+  };
+  data.users.push(newUser);
+  writeUsers(data);
+  return res.json({ ok: true, user: { id: newUser.id, username: newUser.username, role: newUser.role, displayName: newUser.displayName } });
+});
+
+app.post("/setup/api/users/update", requireSetupAuth, (req, res) => {
+  const { id, role, displayName, enabled, password } = req.body || {};
+  if (!id) return res.status(400).json({ ok: false, error: "User id required" });
+  const data = readUsers();
+  const user = data.users.find(u => u.id === id);
+  if (!user) return res.status(404).json({ ok: false, error: "User not found" });
+  if (role && ROLES[role]) user.role = role;
+  if (typeof displayName === "string") user.displayName = displayName.trim().slice(0, 100);
+  if (typeof enabled === "boolean") user.enabled = enabled;
+  if (password) user.passwordHash = crypto.createHash("sha256").update(password).digest("hex");
+  writeUsers(data);
+  return res.json({ ok: true });
+});
+
+app.post("/setup/api/users/delete", requireSetupAuth, (req, res) => {
+  const { id } = req.body || {};
+  if (!id) return res.status(400).json({ ok: false, error: "User id required" });
+  const data = readUsers();
+  data.users = data.users.filter(u => u.id !== id);
+  data.sessions = (data.sessions || []).filter(s => s.userId !== id);
+  writeUsers(data);
+  return res.json({ ok: true });
+});
+
+// ── Session Termination ─────────────────────────────────────────────────
+
+app.post("/setup/api/sessions/terminate", requireSetupAuth, async (req, res) => {
+  const { sessionId } = req.body || {};
+  if (!sessionId) return res.status(400).json({ ok: false, error: "sessionId required" });
+  try {
+    const r = await runCmd(OPENCLAW_NODE, clawArgs(["sessions", "delete", sessionId]));
+    return res.json({ ok: true, output: r.output });
+  } catch (err) {
+    // Try kill approach if delete doesn't work
+    try {
+      await runCmd("sh", ["-c", `pkill -f "session-id.*${sessionId.replace(/[^a-zA-Z0-9_-]/g, "")}" 2>/dev/null || true`]);
+      return res.json({ ok: true, output: "Session terminated via process kill" });
+    } catch {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+});
+
+// Session detail with messages/history
+app.get("/setup/api/sessions/detail", requireSetupAuth, async (req, res) => {
+  const { id } = req.query || {};
+  if (!id) return res.status(400).json({ ok: false, error: "Session id required" });
+  try {
+    // Get session info
+    const r = await runCmd(OPENCLAW_NODE, clawArgs(["sessions", "--json"]));
+    let sessions = [];
+    try { sessions = JSON.parse(r.output.trim()); } catch { /* */ }
+    if (!Array.isArray(sessions)) sessions = sessions.sessions || sessions.data || [];
+    const session = sessions.find(s => s.id === id || s.sessionId === id);
+
+    // Try to get session log
+    let messages = [];
+    try {
+      const logR = await runCmd(OPENCLAW_NODE, clawArgs(["sessions", "log", id, "--json"]), { timeout: 10000 });
+      const logOutput = logR.output.trim();
+      if (logOutput) {
+        try { messages = JSON.parse(logOutput); } catch { /* not parseable */ }
+        if (!Array.isArray(messages)) messages = messages.messages || messages.entries || [];
+      }
+    } catch { /* log command may not exist */ }
+
+    return res.json({
+      ok: true,
+      session: session || { id, status: "unknown" },
+      messages,
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Project Management (Create / Clone) ─────────────────────────────────
+
+app.post("/setup/api/projects/create", requireSetupAuth, async (req, res) => {
+  const { name, repo, description, template } = req.body || {};
+  if (!name) return res.status(400).json({ ok: false, error: "Project name required" });
+
+  const safeName = name.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 100);
+  const projectPath = path.join(WORKSPACE_DIR, safeName);
+
+  if (fs.existsSync(projectPath)) {
+    return res.status(409).json({ ok: false, error: "Project directory already exists" });
+  }
+
+  try {
+    if (repo) {
+      // Clone existing repo
+      const repoUrl = repo.includes("://") ? repo : `https://github.com/${repo}.git`;
+      const r = await runCmd("git", ["clone", repoUrl, projectPath], { timeout: 60000 });
+      return res.json({ ok: true, path: projectPath, output: r.output, method: "clone" });
+    } else {
+      // Create new project
+      fs.mkdirSync(projectPath, { recursive: true });
+      fs.writeFileSync(path.join(projectPath, "README.md"), `# ${name}\n\n${description || ""}\n`);
+      await runCmd("git", ["init"], { cwd: projectPath });
+      await runCmd("git", ["add", "."], { cwd: projectPath });
+      await runCmd("git", ["commit", "-m", "Initial commit"], { cwd: projectPath });
+
+      // Apply template scaffolding if provided
+      if (template === "node") {
+        fs.writeFileSync(path.join(projectPath, "package.json"), JSON.stringify({ name: safeName, version: "1.0.0", description: description || "", main: "index.js", scripts: { start: "node index.js", test: "echo \"no tests\"" } }, null, 2));
+        fs.writeFileSync(path.join(projectPath, "index.js"), "// TODO: Implement\nconsole.log('Hello from " + safeName + "');\n");
+      } else if (template === "python") {
+        fs.writeFileSync(path.join(projectPath, "main.py"), "# TODO: Implement\nprint('Hello from " + safeName + "')\n");
+        fs.writeFileSync(path.join(projectPath, "requirements.txt"), "");
+      }
+
+      return res.json({ ok: true, path: projectPath, method: "create" });
+    }
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// AI project idea generation
+app.post("/setup/api/projects/ideas", requireSetupAuth, async (req, res) => {
+  const { context } = req.body || {};
+  try {
+    // Use the agent to generate project ideas based on workspace context
+    const projectsR = await runCmd("sh", ["-c", `ls -1 "${WORKSPACE_DIR}" 2>/dev/null | head -20`]);
+    const existingProjects = projectsR.output.trim();
+
+    const prompt = `Based on the existing projects: ${existingProjects}. ${context || "Suggest 5 innovative project ideas that complement the existing portfolio. Include: AI/ML projects, web applications, automation tools, and data analysis projects."} Format as JSON array with fields: name, description, template (node/python/other), category, difficulty (easy/medium/hard).`;
+
+    const agentArgs = ["agent", "--session-id", "project-ideas", "--message", prompt, "--timeout", "60"];
+    const r = await runCmd(OPENCLAW_NODE, clawArgs(agentArgs), { timeout: 70000 });
+
+    // Try to extract JSON from output
+    let ideas = [];
+    const output = r.output || "";
+    const jsonMatch = output.match(/\[[\s\S]*?\]/);
+    if (jsonMatch) {
+      try { ideas = JSON.parse(jsonMatch[0]); } catch { /* */ }
+    }
+
+    return res.json({ ok: true, ideas, raw: output.slice(0, 5000) });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Tools Management ────────────────────────────────────────────────────
+
+app.get("/setup/api/tools/list", requireSetupAuth, async (_req, res) => {
+  const tools = [
+    { id: "gh", name: "GitHub CLI", checkCmd: "gh --version 2>&1 | head -1", category: "devops" },
+    { id: "git", name: "Git", checkCmd: "git --version 2>&1", category: "devops" },
+    { id: "node", name: "Node.js", checkCmd: "node --version 2>&1", category: "runtime" },
+    { id: "npm", name: "npm", checkCmd: "npm --version 2>&1", category: "runtime" },
+    { id: "jq", name: "jq", checkCmd: "jq --version 2>&1", category: "utility" },
+    { id: "wrangler", name: "Wrangler (Cloudflare)", checkCmd: "wrangler --version 2>&1 | head -1", category: "deploy" },
+    { id: "railway", name: "Railway CLI", checkCmd: "railway --version 2>&1 | head -1", category: "deploy" },
+    { id: "clawhub", name: "ClawHub CLI", checkCmd: "clawhub --version 2>&1 | head -1", category: "openclaw" },
+    { id: "python3", name: "Python 3", checkCmd: "python3 --version 2>&1", category: "runtime" },
+    { id: "curl", name: "curl", checkCmd: "curl --version 2>&1 | head -1", category: "utility" },
+    { id: "docker", name: "Docker", checkCmd: "docker --version 2>&1", category: "devops" },
+  ];
+
+  const results = await Promise.allSettled(
+    tools.map(async (tool) => {
+      try {
+        const r = await runCmd("sh", ["-c", tool.checkCmd], { timeout: 5000 });
+        return { ...tool, installed: r.code === 0, version: r.output.trim().slice(0, 200) };
+      } catch {
+        return { ...tool, installed: false, version: null };
+      }
+    })
+  );
+
+  const envVars = ["GH_PAT", "OPENROUTER_API_TOKEN", "ANTHROPIC_API_KEY", "CLOUDFLARE_ACCOUNT_ID",
+    "RAILWAY_ACCOUNT_TOKEN", "TELEGRAM_API_ID", "TELEGRAM_API_HASH", "GROK_API_KEY",
+    "SETUP_PASSWORD", "OPENCLAW_GATEWAY_TOKEN"];
+  const envStatus = envVars.map(v => ({ name: v, set: !!process.env[v] }));
+
+  return res.json({
+    ok: true,
+    tools: results.map(r => r.status === "fulfilled" ? r.value : r.reason),
+    envVars: envStatus,
+  });
+});
+
+app.post("/setup/api/tools/install", requireSetupAuth, async (req, res) => {
+  const { tool } = req.body || {};
+  if (!tool) return res.status(400).json({ ok: false, error: "Tool name required" });
+
+  // Supported tool installations
+  const installCmds = {
+    "gh": "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && apt-get update && apt-get install gh -y",
+    "jq": "apt-get update && apt-get install -y jq",
+    "python3": "apt-get update && apt-get install -y python3 python3-pip",
+    "curl": "apt-get update && apt-get install -y curl",
+    "clawhub": "npm install -g clawhub@latest",
+    "wrangler": "npm install -g wrangler@latest",
+  };
+
+  if (!installCmds[tool]) {
+    return res.status(400).json({ ok: false, error: `No install recipe for: ${tool}. Install it manually via the shell.` });
+  }
+
+  try {
+    const r = await runCmd("sh", ["-c", installCmds[tool]], { timeout: 120000 });
+    return res.json({ ok: true, output: r.output.slice(-2000), code: r.code });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/setup/api/tools/set-env", requireSetupAuth, async (req, res) => {
+  const { name, value } = req.body || {};
+  if (!name || typeof name !== "string") return res.status(400).json({ ok: false, error: "Variable name required" });
+  // Set in current process
+  if (value) {
+    process.env[name] = value;
+  } else {
+    delete process.env[name];
+  }
+  return res.json({ ok: true, note: "Set in current process. For persistence across deploys, set via Railway env vars." });
+});
 
 // ── Activity Log API ────────────────────────────────────────────────────
 
