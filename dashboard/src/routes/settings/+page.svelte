@@ -52,6 +52,14 @@
   let addModelOpen = $state(false);
   let newModel = $state({ id: '', provider: '', tier: 'standard', costPer1kTokens: 0, dailyLimit: 20, priority: 5, minTaskPriority: 1, maxTaskPriority: 10, enabled: true, capabilities: [] });
 
+  // Free Model Scanner
+  let scannerLoading = $state(false);
+  let scannerResults = $state(null);
+  let scannerConfig = $state(null);
+  let scannerConfigSaving = $state(false);
+  let addingModel = $state(null);
+  let blockingModel = $state(null);
+
   // Debug info
   let debugLoading = $state(true);
   let debugInfo = $state(null);
@@ -232,6 +240,75 @@
     modelPool.models = modelPool.models.filter((_, i) => i !== index);
   }
 
+  async function runScan() {
+    scannerLoading = true;
+    try {
+      const res = await api.post('/setup/api/scanner/scan');
+      scannerResults = res;
+      success(`Scan complete: ${res.newCandidates} new candidates found`);
+    } catch (err) {
+      notifyError('Scan failed: ' + (err.body || err.message));
+    }
+    scannerLoading = false;
+  }
+
+  async function loadScannerResults() {
+    try {
+      const res = await api.get('/setup/api/scanner/results');
+      if (res.scannedAt) scannerResults = res;
+    } catch { /* no results yet */ }
+  }
+
+  async function loadScannerConfig() {
+    try {
+      const res = await api.get('/setup/api/scanner/config');
+      scannerConfig = res.config;
+    } catch { /* defaults */ }
+  }
+
+  async function saveScannerConfig() {
+    if (!scannerConfig) return;
+    scannerConfigSaving = true;
+    try {
+      await api.post('/setup/api/scanner/config', scannerConfig);
+      success('Scanner config saved');
+    } catch (err) { notifyError('Failed: ' + (err.body || err.message)); }
+    scannerConfigSaving = false;
+  }
+
+  async function addScannedModel(modelId) {
+    addingModel = modelId;
+    try {
+      await api.post('/setup/api/scanner/add', { modelId });
+      success(`Added ${modelId} to pool`);
+      await Promise.all([loadScheduler(), loadScannerResults()]);
+    } catch (err) {
+      notifyError('Failed to add: ' + (err.body || err.message));
+    }
+    addingModel = null;
+  }
+
+  async function blockModel(modelId) {
+    blockingModel = modelId;
+    try {
+      await api.post('/setup/api/scanner/block', { modelId });
+      success(`Blocked ${modelId}`);
+      if (scannerResults?.models) {
+        scannerResults = { ...scannerResults, models: scannerResults.models.filter(m => m.id !== modelId) };
+      }
+    } catch (err) {
+      notifyError('Failed: ' + (err.body || err.message));
+    }
+    blockingModel = null;
+  }
+
+  function formatCtx(len) {
+    if (!len) return '?';
+    if (len >= 1000000) return `${(len / 1000000).toFixed(1)}M`;
+    if (len >= 1000) return `${Math.round(len / 1000)}k`;
+    return String(len);
+  }
+
   const tabs = [
     { id: 'connection', label: 'Connection', icon: 'wifi' },
     { id: 'scheduler', label: 'Scheduler', icon: 'scheduler' },
@@ -244,7 +321,7 @@
   function switchTab(id) {
     activeTab = id;
     if (id === 'connection' && !connData) loadConnection();
-    if (id === 'scheduler' && modelPool.models.length === 0) loadScheduler();
+    if (id === 'scheduler' && modelPool.models.length === 0) { loadScheduler(); loadScannerResults(); loadScannerConfig(); }
     if (id === 'tokens' && tokens.length === 0) loadTokens();
     if (id === 'runner' && !runnerConfig.maxConcurrent) loadRunnerConfig();
     if (id === 'ticker' && tickerLoading) loadTickerConfig();
@@ -257,6 +334,8 @@
     loadTickerConfig();
     loadRunnerConfig();
     loadScheduler();
+    loadScannerResults();
+    loadScannerConfig();
   });
 </script>
 
@@ -540,6 +619,168 @@
               </div>
             </div>
           {/each}
+        </div>
+
+        <!-- ── Free Model Scanner ── -->
+        <div class="border-t border-border/50 pt-6 mt-2">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h2 class="text-lg font-semibold text-text flex items-center gap-2">
+                <svg class="w-5 h-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                </svg>
+                Free Model Scanner
+              </h2>
+              <p class="text-xs text-text-3 mt-0.5">Discovers performant free models from OpenRouter</p>
+            </div>
+            <Button variant="primary" size="sm" loading={scannerLoading} onclick={runScan}>
+              {scannerLoading ? 'Scanning...' : 'Scan Now'}
+            </Button>
+          </div>
+
+          {#if scannerResults?.scannedAt}
+            <div class="bg-surface border border-border rounded-xl p-3 mb-4">
+              <div class="flex items-center justify-between text-xs text-text-3 mb-2">
+                <span>Last scan: {formatDate(scannerResults.scannedAt)}</span>
+                <span>{scannerResults.totalFreeFound} free models found, {scannerResults.filtered || 0} filtered, {scannerResults.newCandidates} new</span>
+              </div>
+              <div class="grid grid-cols-3 gap-2 text-center">
+                <div class="bg-bg rounded-lg p-2">
+                  <div class="text-lg font-bold text-accent-2">{scannerResults.totalFreeFound}</div>
+                  <div class="text-[10px] text-text-3 uppercase tracking-wider">Total Free</div>
+                </div>
+                <div class="bg-bg rounded-lg p-2">
+                  <div class="text-lg font-bold text-success">{scannerResults.alreadyInPool}</div>
+                  <div class="text-[10px] text-text-3 uppercase tracking-wider">In Pool</div>
+                </div>
+                <div class="bg-bg rounded-lg p-2">
+                  <div class="text-lg font-bold text-warning">{scannerResults.newCandidates}</div>
+                  <div class="text-[10px] text-text-3 uppercase tracking-wider">New</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Top Recommendations -->
+            {#if scannerResults.topRecommendations?.length > 0}
+              <h3 class="text-sm font-semibold text-text mb-2">Top Recommendations</h3>
+              <div class="space-y-2 mb-4">
+                {#each scannerResults.topRecommendations as rec}
+                  <div class="bg-surface border border-border rounded-xl p-3">
+                    <div class="flex items-center justify-between gap-2 mb-1.5">
+                      <div class="flex items-center gap-2 min-w-0">
+                        <span class="font-mono text-sm text-text font-semibold truncate">{rec.id}</span>
+                        <span class="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-accent/15 text-accent-2 flex-shrink-0">
+                          Score: {rec.score}
+                        </span>
+                      </div>
+                      <div class="flex items-center gap-1.5 flex-shrink-0">
+                        <button
+                          class="text-xs px-2 py-1 rounded-lg bg-accent/10 text-accent-2 hover:bg-accent/20 cursor-pointer transition-colors disabled:opacity-40"
+                          disabled={addingModel === rec.id}
+                          onclick={() => addScannedModel(rec.id)}
+                        >{addingModel === rec.id ? 'Adding...' : 'Add to Pool'}</button>
+                        <button
+                          class="text-xs px-2 py-1 rounded-lg text-text-3 hover:bg-danger/10 hover:text-danger cursor-pointer transition-colors disabled:opacity-40"
+                          disabled={blockingModel === rec.id}
+                          onclick={() => blockModel(rec.id)}
+                        >Block</button>
+                      </div>
+                    </div>
+                    <div class="flex items-center gap-3 text-[11px] text-text-3">
+                      {#if rec.name}
+                        <span class="truncate max-w-[200px]">{rec.name}</span>
+                      {/if}
+                      <span>CTX: {formatCtx(rec.contextLength)}</span>
+                      {#if rec.maxOutputTokens}
+                        <span>Out: {formatCtx(rec.maxOutputTokens)}</span>
+                      {/if}
+                    </div>
+                    {#if rec.reasons?.length > 0}
+                      <div class="flex flex-wrap gap-1 mt-1.5">
+                        {#each rec.reasons as reason}
+                          <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-bg text-text-3 border border-border/50">{reason}</span>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="text-xs text-text-3 italic mb-4">No new candidates found. All qualifying models are already in your pool.</p>
+            {/if}
+          {:else}
+            <div class="bg-bg border border-border/50 rounded-xl p-6 text-center mb-4">
+              <svg class="w-8 h-8 text-text-3 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+              </svg>
+              <p class="text-sm text-text-3">No scan results yet</p>
+              <p class="text-xs text-text-3/60 mt-1">Click "Scan Now" to discover free models from OpenRouter</p>
+            </div>
+          {/if}
+
+          <!-- Scanner Settings -->
+          {#if scannerConfig}
+            <details class="bg-surface border border-border rounded-xl overflow-hidden">
+              <summary class="px-4 py-3 cursor-pointer text-sm font-medium text-text-2 hover:text-text transition-colors flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                Scanner Settings
+              </summary>
+              <div class="px-4 pb-4 space-y-3 border-t border-border/50">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-3">
+                  <div class="flex items-center gap-3">
+                    <label class="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" bind:checked={scannerConfig.autoScanEnabled} class="sr-only peer" />
+                      <div class="w-9 h-5 bg-border rounded-full peer peer-checked:bg-accent transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+                    </label>
+                    <span class="text-sm text-text-2">Auto-scan periodically</span>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <label class="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" bind:checked={scannerConfig.autoAddEnabled} class="sr-only peer" />
+                      <div class="w-9 h-5 bg-border rounded-full peer peer-checked:bg-accent transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+                    </label>
+                    <span class="text-sm text-text-2">Auto-add top models (score 40+)</span>
+                  </div>
+                  <div>
+                    <label class="text-xs text-text-3 block mb-1">Scan Interval (hours)</label>
+                    <input type="number" min="1" max="168" bind:value={scannerConfig.autoScanIntervalHours}
+                      class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/50" />
+                  </div>
+                  <div>
+                    <label class="text-xs text-text-3 block mb-1">Min Context Length</label>
+                    <input type="number" min="1000" step="1000" bind:value={scannerConfig.minContextLength}
+                      class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/50" />
+                  </div>
+                  <div>
+                    <label class="text-xs text-text-3 block mb-1">Max Auto-Add per Scan</label>
+                    <input type="number" min="0" max="10" bind:value={scannerConfig.maxAutoAdd}
+                      class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/50" />
+                  </div>
+                </div>
+                {#if scannerConfig.blocklist?.length > 0}
+                  <div>
+                    <label class="text-xs text-text-3 block mb-1">Blocked Models ({scannerConfig.blocklist.length})</label>
+                    <div class="flex flex-wrap gap-1">
+                      {#each scannerConfig.blocklist as blocked}
+                        <span class="text-[10px] px-2 py-0.5 rounded-full bg-danger/10 text-danger border border-danger/20 flex items-center gap-1">
+                          {blocked}
+                          <button class="hover:text-white cursor-pointer" onclick={() => {
+                            scannerConfig.blocklist = scannerConfig.blocklist.filter(b => b !== blocked);
+                          }}>&times;</button>
+                        </span>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
+                <div class="flex justify-end">
+                  <Button variant="secondary" size="sm" loading={scannerConfigSaving} onclick={saveScannerConfig}>Save Scanner Settings</Button>
+                </div>
+              </div>
+            </details>
+          {/if}
         </div>
 
         <div class="flex justify-end gap-2">

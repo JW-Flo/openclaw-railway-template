@@ -1895,6 +1895,362 @@ app.get("/setup/api/scheduler/status", requireSetupAuth, (_req, res) => {
   });
 });
 
+// ── Free Model Scanner ─────────────────────────────────────────────────
+
+const SCANNER_RESULTS_PATH = path.join(STATE_DIR, "scanner-results.json");
+const SCANNER_CONFIG_PATH = path.join(STATE_DIR, "scanner-config.json");
+
+function readScannerConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(SCANNER_CONFIG_PATH, "utf8"));
+  } catch {
+    const defaults = {
+      autoScanEnabled: false,
+      autoScanIntervalHours: 24,
+      lastScanAt: null,
+      minContextLength: 8000,
+      requiredModalities: ["text"],
+      preferCapabilities: ["code", "analysis"],
+      maxAutoAdd: 3,
+      autoAddEnabled: false,
+      blocklist: [],
+      approvedModels: [],
+    };
+    fs.writeFileSync(SCANNER_CONFIG_PATH, JSON.stringify(defaults, null, 2));
+    return defaults;
+  }
+}
+
+function writeScannerConfig(config) {
+  fs.writeFileSync(SCANNER_CONFIG_PATH, JSON.stringify(config, null, 2));
+}
+
+function readScannerResults() {
+  try {
+    return JSON.parse(fs.readFileSync(SCANNER_RESULTS_PATH, "utf8"));
+  } catch {
+    return { models: [], scannedAt: null, totalFreeFound: 0, alreadyInPool: 0, newCandidates: 0 };
+  }
+}
+
+function writeScannerResults(results) {
+  fs.writeFileSync(SCANNER_RESULTS_PATH, JSON.stringify(results, null, 2));
+}
+
+function scoreModel(model, config) {
+  let score = 0;
+  const reasons = [];
+
+  // Context length scoring (bigger = better for coding tasks)
+  const ctx = model.context_length || 0;
+  if (ctx >= 128000) { score += 30; reasons.push("128k+ context"); }
+  else if (ctx >= 32000) { score += 20; reasons.push("32k+ context"); }
+  else if (ctx >= 16000) { score += 10; reasons.push("16k+ context"); }
+  else if (ctx >= config.minContextLength) { score += 5; }
+  else { return { score: -1, reasons: ["context too small"] }; }
+
+  // Modality check
+  const inputMods = model.architecture?.input_modalities || [];
+  const outputMods = model.architecture?.output_modalities || [];
+  const hasTextInput = inputMods.includes("text");
+  const hasTextOutput = outputMods.includes("text");
+  if (!hasTextInput || !hasTextOutput) {
+    return { score: -1, reasons: ["no text I/O"] };
+  }
+  if (inputMods.includes("image")) { score += 5; reasons.push("multimodal"); }
+
+  // Prefer known-good model families
+  const id = model.id.toLowerCase();
+  const knownGood = [
+    "qwen", "deepseek", "llama", "gemma", "mistral", "phi",
+    "codestral", "starcoder", "solar", "nemotron", "yi",
+  ];
+  const knownRisky = [
+    "nsfw", "uncensored", "roleplay", "erp",
+  ];
+  for (const kw of knownRisky) {
+    if (id.includes(kw) || (model.name || "").toLowerCase().includes(kw)) {
+      return { score: -1, reasons: [`flagged: ${kw}`] };
+    }
+  }
+  for (const kw of knownGood) {
+    if (id.includes(kw)) { score += 15; reasons.push(`known family: ${kw}`); break; }
+  }
+
+  // Coding capability inference from description
+  const desc = (model.description || "").toLowerCase();
+  const codingKeywords = ["code", "programming", "developer", "software", "coding", "technical"];
+  const codingHits = codingKeywords.filter((kw) => desc.includes(kw));
+  if (codingHits.length > 0) {
+    score += codingHits.length * 5;
+    reasons.push(`coding signals: ${codingHits.join(", ")}`);
+  }
+
+  // Prefer models with reasoning capability
+  if (desc.includes("reason") || desc.includes("thinking") || desc.includes("chain-of-thought")) {
+    score += 10;
+    reasons.push("reasoning capability");
+  }
+
+  // Max completion tokens (higher = more useful for code generation)
+  const maxComp = model.top_provider?.max_completion_tokens || 0;
+  if (maxComp >= 16384) { score += 10; reasons.push(`${maxComp} max output`); }
+  else if (maxComp >= 4096) { score += 5; reasons.push(`${maxComp} max output`); }
+
+  // Moderation preference (moderated = safer)
+  if (model.top_provider?.is_moderated) { score += 5; reasons.push("moderated"); }
+
+  // Recency (prefer newer models)
+  const created = model.created || 0;
+  const ageMs = Date.now() - created * 1000;
+  const ageDays = ageMs / (1000 * 60 * 60 * 24);
+  if (ageDays < 30) { score += 15; reasons.push("very recent"); }
+  else if (ageDays < 90) { score += 10; reasons.push("recent"); }
+  else if (ageDays < 180) { score += 5; reasons.push("fairly recent"); }
+
+  // Penalize expiring models
+  if (model.expiration_date) {
+    const expiry = new Date(model.expiration_date);
+    const daysUntilExpiry = (expiry - Date.now()) / (1000 * 60 * 60 * 24);
+    if (daysUntilExpiry < 7) { return { score: -1, reasons: ["expiring soon"] }; }
+    if (daysUntilExpiry < 30) { score -= 10; reasons.push("expiring within 30d"); }
+  }
+
+  return { score, reasons };
+}
+
+async function scanForFreeModels() {
+  const config = readScannerConfig();
+  const pool = readModelPool();
+  const existingIds = new Set(pool.models.map((m) => m.id));
+
+  // Fetch OpenRouter model list
+  const resp = await fetch("https://openrouter.ai/api/v1/models");
+  if (!resp.ok) throw new Error(`OpenRouter API returned ${resp.status}`);
+  const data = await resp.json();
+  const allModels = data.data || [];
+
+  // Filter to free models
+  const freeModels = allModels.filter((m) => {
+    const p = m.pricing || {};
+    return p.prompt === "0" && p.completion === "0";
+  });
+
+  // Score and rank
+  const scored = freeModels
+    .map((m) => {
+      const { score, reasons } = scoreModel(m, config);
+      return {
+        id: m.id,
+        name: m.name,
+        contextLength: m.context_length,
+        maxOutputTokens: m.top_provider?.max_completion_tokens || null,
+        inputModalities: m.architecture?.input_modalities || [],
+        outputModalities: m.architecture?.output_modalities || [],
+        isModerated: m.top_provider?.is_moderated || false,
+        created: m.created,
+        expirationDate: m.expiration_date || null,
+        score,
+        reasons,
+        inPool: existingIds.has(m.id),
+        blocked: config.blocklist.includes(m.id),
+        approved: config.approvedModels.includes(m.id),
+      };
+    })
+    .filter((m) => m.score >= 0 && !m.blocked)
+    .sort((a, b) => b.score - a.score);
+
+  const newCandidates = scored.filter((m) => !m.inPool);
+  const alreadyInPool = scored.filter((m) => m.inPool);
+
+  const results = {
+    models: scored,
+    scannedAt: new Date().toISOString(),
+    totalFreeFound: freeModels.length,
+    totalEvaluated: scored.length + freeModels.filter((m) => scoreModel(m, config).score < 0).length,
+    filtered: freeModels.length - scored.length,
+    alreadyInPool: alreadyInPool.length,
+    newCandidates: newCandidates.length,
+    topRecommendations: newCandidates.slice(0, 10).map((m) => ({
+      id: m.id,
+      name: m.name,
+      score: m.score,
+      contextLength: m.contextLength,
+      maxOutputTokens: m.maxOutputTokens,
+      reasons: m.reasons,
+    })),
+  };
+
+  writeScannerResults(results);
+  config.lastScanAt = results.scannedAt;
+  writeScannerConfig(config);
+
+  return results;
+}
+
+// Scan for free models
+app.post("/setup/api/scanner/scan", requireSetupAuth, async (_req, res) => {
+  try {
+    const results = await scanForFreeModels();
+    return res.json({ ok: true, ...results });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Get latest scan results
+app.get("/setup/api/scanner/results", requireSetupAuth, (_req, res) => {
+  return res.json({ ok: true, ...readScannerResults() });
+});
+
+// Get/update scanner config
+app.get("/setup/api/scanner/config", requireSetupAuth, (_req, res) => {
+  return res.json({ ok: true, config: readScannerConfig() });
+});
+
+app.post("/setup/api/scanner/config", requireSetupAuth, (req, res) => {
+  const config = readScannerConfig();
+  const updates = req.body || {};
+  if (typeof updates.autoScanEnabled === "boolean") config.autoScanEnabled = updates.autoScanEnabled;
+  if (typeof updates.autoScanIntervalHours === "number") config.autoScanIntervalHours = Math.max(1, Math.min(168, updates.autoScanIntervalHours));
+  if (typeof updates.minContextLength === "number") config.minContextLength = Math.max(1000, updates.minContextLength);
+  if (typeof updates.maxAutoAdd === "number") config.maxAutoAdd = Math.max(0, Math.min(10, updates.maxAutoAdd));
+  if (typeof updates.autoAddEnabled === "boolean") config.autoAddEnabled = updates.autoAddEnabled;
+  if (Array.isArray(updates.blocklist)) config.blocklist = updates.blocklist.filter((s) => typeof s === "string");
+  writeScannerConfig(config);
+  return res.json({ ok: true, config });
+});
+
+// Add a scanned model to the pool
+app.post("/setup/api/scanner/add", requireSetupAuth, (req, res) => {
+  const { modelId } = req.body || {};
+  if (!modelId) return res.status(400).json({ ok: false, error: "modelId required" });
+
+  const pool = readModelPool();
+  if (pool.models.some((m) => m.id === modelId)) {
+    return res.status(409).json({ ok: false, error: "Model already in pool" });
+  }
+
+  const scanResults = readScannerResults();
+  const scanned = scanResults.models?.find((m) => m.id === modelId);
+  if (!scanned) {
+    return res.status(404).json({ ok: false, error: "Model not found in scan results. Run a scan first." });
+  }
+
+  // Infer capabilities from scan data
+  const capabilities = ["code"];
+  if (scanned.reasons?.some((r) => r.includes("coding") || r.includes("code"))) capabilities.push("analysis");
+  if (scanned.reasons?.some((r) => r.includes("reasoning"))) capabilities.push("planning");
+  if (scanned.contextLength >= 32000) capabilities.push("analysis");
+  const uniqueCaps = [...new Set(capabilities)];
+
+  const newModel = {
+    id: modelId,
+    provider: "openrouter",
+    tier: "free",
+    costPer1kTokens: 0,
+    dailyLimit: 50,
+    usedToday: 0,
+    lastResetDate: "",
+    enabled: true,
+    priority: pool.models.length + 1,
+    minTaskPriority: 5,
+    maxTaskPriority: 10,
+    capabilities: uniqueCaps,
+    addedByScanner: true,
+    scanScore: scanned.score,
+    addedAt: new Date().toISOString(),
+  };
+
+  pool.models.push(newModel);
+  writeModelPool(pool);
+
+  // Track as approved
+  const config = readScannerConfig();
+  if (!config.approvedModels.includes(modelId)) {
+    config.approvedModels.push(modelId);
+    writeScannerConfig(config);
+  }
+
+  return res.json({ ok: true, model: newModel });
+});
+
+// Block a model from appearing in future scans
+app.post("/setup/api/scanner/block", requireSetupAuth, (req, res) => {
+  const { modelId } = req.body || {};
+  if (!modelId) return res.status(400).json({ ok: false, error: "modelId required" });
+  const config = readScannerConfig();
+  if (!config.blocklist.includes(modelId)) {
+    config.blocklist.push(modelId);
+    writeScannerConfig(config);
+  }
+  return res.json({ ok: true, blocked: config.blocklist });
+});
+
+// Background auto-scanner (runs alongside scheduler)
+let scannerTimer = null;
+
+function startAutoScanner() {
+  const config = readScannerConfig();
+  if (!config.autoScanEnabled) return;
+  const intervalMs = config.autoScanIntervalHours * 60 * 60 * 1000;
+  if (scannerTimer) clearInterval(scannerTimer);
+  scannerTimer = setInterval(async () => {
+    try {
+      const cfg = readScannerConfig();
+      if (!cfg.autoScanEnabled) { stopAutoScanner(); return; }
+      console.log("[scanner] running auto-scan...");
+      const results = await scanForFreeModels();
+      console.log(`[scanner] found ${results.newCandidates} new candidates out of ${results.totalFreeFound} free models`);
+
+      // Auto-add top candidates if enabled
+      if (cfg.autoAddEnabled && results.topRecommendations.length > 0) {
+        const pool = readModelPool();
+        const existingIds = new Set(pool.models.map((m) => m.id));
+        let added = 0;
+        for (const rec of results.topRecommendations) {
+          if (added >= cfg.maxAutoAdd) break;
+          if (existingIds.has(rec.id)) continue;
+          if (rec.score < 40) continue; // minimum quality threshold for auto-add
+
+          const capabilities = ["code"];
+          if (rec.reasons?.some((r) => r.includes("coding"))) capabilities.push("analysis");
+          if (rec.reasons?.some((r) => r.includes("reasoning"))) capabilities.push("planning");
+          if (rec.contextLength >= 32000) capabilities.push("analysis");
+
+          pool.models.push({
+            id: rec.id,
+            provider: "openrouter",
+            tier: "free",
+            costPer1kTokens: 0,
+            dailyLimit: 50,
+            usedToday: 0,
+            lastResetDate: "",
+            enabled: true,
+            priority: pool.models.length + 1,
+            minTaskPriority: 5,
+            maxTaskPriority: 10,
+            capabilities: [...new Set(capabilities)],
+            addedByScanner: true,
+            scanScore: rec.score,
+            addedAt: new Date().toISOString(),
+          });
+          added++;
+          console.log(`[scanner] auto-added model: ${rec.id} (score: ${rec.score})`);
+        }
+        if (added > 0) writeModelPool(pool);
+      }
+    } catch (err) {
+      console.error("[scanner] auto-scan failed:", err.message);
+    }
+  }, intervalMs);
+  console.log(`[scanner] auto-scanner started (every ${config.autoScanIntervalHours}h)`);
+}
+
+function stopAutoScanner() {
+  if (scannerTimer) { clearInterval(scannerTimer); scannerTimer = null; }
+}
+
 // ── Activity Log API ────────────────────────────────────────────────────
 
 app.get("/setup/api/activity", requireSetupAuth, (req, res) => {
@@ -2819,8 +3175,9 @@ const server = app.listen(PORT, () => {
         console.warn(`[wrapper] doctor --fix failed: ${err.message}`);
       }
       await ensureGatewayRunning();
-      // Start auto-scheduler after gateway is ready
+      // Start auto-scheduler and model scanner after gateway is ready
       startScheduler();
+      startAutoScanner();
     })().catch((err) => {
       console.error(`[wrapper] failed to start gateway at boot: ${err.message}`);
     });
@@ -2894,6 +3251,7 @@ async function gracefulShutdown(signal) {
   console.log(`[wrapper] received ${signal}, shutting down`);
   shuttingDown = true;
   stopScheduler();
+  stopAutoScanner();
 
   if (setupRateLimiter.cleanupInterval) {
     clearInterval(setupRateLimiter.cleanupInterval);
