@@ -381,21 +381,47 @@ curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/js
 
 ### Deploy Workflow (code changes)
 
-1. Make changes on branch `claude/openclaw-orchestrator-work-*`
-2. `npm run lint` to verify syntax
-3. Commit, push, create PR via GitHub API:
+Follow this exact sequence for every PR. Do NOT skip the review step.
+
+1. **Develop** on a feature branch (`claude/<description>-<sessionId>`)
+2. **Lint**: `npm run lint` to verify syntax
+3. **Commit & push**: Commit with descriptive message, `git push -u origin <branch>`
+4. **Create PR** via GitHub API (use `$GH_PAT`):
    ```bash
    curl -s -X POST "https://api.github.com/repos/JW-Flo/openclaw-railway-template/pulls" \
      -H "Authorization: token ${GH_PAT}" -H "Content-Type: application/json" \
-     -d '{"title":"PR title","body":"Description","head":"branch-name","base":"main"}'
+     -d '{"title":"PR title","body":"## Summary\n- ...\n\n## Test plan\n- [ ] ...","head":"branch-name","base":"main"}'
    ```
-4. Merge PR:
+5. **Request Copilot review**:
    ```bash
-   curl -s -X PUT "https://api.github.com/repos/JW-Flo/openclaw-railway-template/pulls/NUMBER/merge" \
-     -H "Authorization: token ${GH_PAT}" -d '{"merge_method":"squash"}'
+   curl -s -X POST -H "Authorization: token ${GH_PAT}" -H "Content-Type: application/json" \
+     "https://api.github.com/repos/JW-Flo/openclaw-railway-template/pulls/NUMBER/requested_reviewers" \
+     -d '{"reviewers":["Copilot"]}'
    ```
-5. Railway auto-deploys from main (~60-90s for Docker build)
-6. After squash-merge, rebase feature branch: `git fetch origin main && git rebase origin/main`
+6. **Wait for review** (~30-60s), then fetch comments:
+   ```bash
+   curl -s -H "Authorization: token ${GH_PAT}" \
+     "https://api.github.com/repos/JW-Flo/openclaw-railway-template/pulls/NUMBER/reviews"
+   curl -s -H "Authorization: token ${GH_PAT}" \
+     "https://api.github.com/repos/JW-Flo/openclaw-railway-template/pulls/NUMBER/comments"
+   ```
+7. **Fix findings**: Address all actionable review comments (security, bugs, docs). Acknowledged-risk items (e.g. architecture decisions) can be noted and skipped.
+8. **Push fixes**, then **re-request review** via the reviewers API:
+   ```bash
+   curl -s -X POST -H "Authorization: token ${GH_PAT}" -H "Content-Type: application/json" \
+     "https://api.github.com/repos/JW-Flo/openclaw-railway-template/pulls/NUMBER/requested_reviewers" \
+     -d '{"reviewers":["Copilot"]}'
+   ```
+   Note: Pushing new commits alone does not re-trigger Copilot. You must re-request via the API.
+9. **Verify clean**: Wait ~60s, re-fetch reviews/comments, confirm no new actionable findings
+10. **Squash merge**:
+    ```bash
+    curl -s -X PUT -H "Authorization: token ${GH_PAT}" -H "Content-Type: application/json" \
+      "https://api.github.com/repos/JW-Flo/openclaw-railway-template/pulls/NUMBER/merge" \
+      -d '{"merge_method":"squash"}'
+    ```
+11. **Reset feature branch** (squash merge diverges history): `git fetch origin main && git reset --hard origin/main`
+12. Railway **auto-deploys** from main (~60-90s for Docker build)
 
 ### Full Status Check (copy-paste)
 
