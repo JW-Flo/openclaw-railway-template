@@ -1965,14 +1965,6 @@ function scoreModel(model, config) {
     "qwen", "deepseek", "llama", "gemma", "mistral", "phi",
     "codestral", "starcoder", "solar", "nemotron", "yi",
   ];
-  const knownRisky = [
-    "nsfw", "uncensored", "roleplay", "erp",
-  ];
-  for (const kw of knownRisky) {
-    if (id.includes(kw) || (model.name || "").toLowerCase().includes(kw)) {
-      return { score: -1, reasons: [`flagged: ${kw}`] };
-    }
-  }
   for (const kw of knownGood) {
     if (id.includes(kw)) { score += 15; reasons.push(`known family: ${kw}`); break; }
   }
