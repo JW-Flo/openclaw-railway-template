@@ -23,6 +23,19 @@ if [ -d /app/workspace-templates ]; then
       chown openclaw:openclaw "$target"
     fi
   done
+  # Bootstrap custom skills (copy entire skill dirs if not already present)
+  if [ -d /app/workspace-templates/skills ]; then
+    mkdir -p /data/workspace/skills
+    for skill_dir in /app/workspace-templates/skills/*/; do
+      skill_name=$(basename "$skill_dir")
+      target="/data/workspace/skills/$skill_name"
+      if [ ! -d "$target" ]; then
+        echo "[entrypoint] bootstrapping skill: $skill_name"
+        cp -r "$skill_dir" "$target"
+        chown -R openclaw:openclaw "$target"
+      fi
+    done
+  fi
 fi
 
 # Configure git with GH_PAT if available
