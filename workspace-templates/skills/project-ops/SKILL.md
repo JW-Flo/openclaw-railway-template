@@ -23,7 +23,7 @@ Manage all workspace repositories as a fleet. Each project lives under `/data/wo
 ```bash
 for dir in Project-AtlasIT AWhittleWandering market_agents JW-Site; do
   echo "=== $dir ==="
-  cd /data/workspace/$dir
+  cd /data/workspace/$dir || { echo "  SKIP: directory not found"; continue; }
   echo "Branch: $(git branch --show-current)"
   echo "Status: $(git status --short | wc -l) dirty files"
   echo "Last commit: $(git log -1 --oneline)"
@@ -36,8 +36,8 @@ done
 ```bash
 for dir in Project-AtlasIT AWhittleWandering market_agents JW-Site; do
   echo "=== Syncing $dir ==="
-  cd /data/workspace/$dir
-  git fetch origin main && git pull origin main
+  cd /data/workspace/$dir || { echo "  SKIP: directory not found"; continue; }
+  git checkout main && git fetch origin main && git pull origin main
 done
 ```
 
@@ -45,7 +45,7 @@ done
 ```bash
 for dir in Project-AtlasIT AWhittleWandering market_agents JW-Site; do
   echo "=== $dir ==="
-  cd /data/workspace/$dir
+  cd /data/workspace/$dir || { echo "  SKIP: directory not found"; continue; }
   if [ -f package.json ]; then
     npm install --silent 2>&1 | tail -3
     npm run build 2>&1 | tail -5
@@ -58,7 +58,7 @@ done
 ```bash
 BRANCH="feat/description"
 for dir in Project-AtlasIT AWhittleWandering market_agents JW-Site; do
-  cd /data/workspace/$dir
+  cd /data/workspace/$dir || { echo "SKIP: $dir not found"; continue; }
   git checkout -b "$BRANCH"
 done
 ```

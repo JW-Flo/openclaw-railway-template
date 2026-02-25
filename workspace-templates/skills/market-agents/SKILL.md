@@ -51,8 +51,8 @@ src/
 ### Check Trading Status
 ```bash
 cd /data/workspace/market_agents
-# Check if the bot is running on Railway
-curl -s https://market-agents-production.up.railway.app/health 2>/dev/null || echo "Not reachable externally"
+# Check if the bot is running on Railway (set MARKET_AGENTS_URL to your deployed URL)
+curl -s "${MARKET_AGENTS_URL:-https://market-agents-production.up.railway.app}/health" 2>/dev/null || echo "Not reachable externally"
 ```
 
 ### Inspect SQLite Database

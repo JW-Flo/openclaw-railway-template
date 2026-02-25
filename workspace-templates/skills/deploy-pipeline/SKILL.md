@@ -36,8 +36,7 @@ git add <files>
 git commit -m "feat: description"
 git push -u origin claude/<description>-<sessionId>
 
-# 4. Create PR via GitHub API
-GH_PAT="${GH_PAT}"
+# 4. Create PR via GitHub API (GH_PAT must be set in env)
 curl -s -X POST "https://api.github.com/repos/JW-Flo/openclaw-railway-template/pulls" \
   -H "Authorization: token ${GH_PAT}" -H "Content-Type: application/json" \
   -d '{"title":"PR title","body":"## Summary\n- ...","head":"branch-name","base":"main"}'
@@ -63,17 +62,17 @@ curl -s -X POST https://backboard.railway.com/graphql/v2 \
   -d '{"query":"mutation { variableUpsert(input: { projectId: \"PROJECT_ID\", environmentId: \"ENV_ID\", serviceId: \"SERVICE_ID\", name: \"VAR_NAME\", value: \"VAR_VALUE\" }) }"}'
 ```
 
-**OpenClaw Railway IDs:**
-- Project: `c57527ed-e599-42da-8f49-7fb30c6c4166`
-- Service: `dac5966e-646e-4644-b3e9-cd31352f696d`
-- Environment: `7932450e-bf32-4428-905e-de0c3dff381f`
+**OpenClaw Railway IDs** (set as env vars or retrieve from Railway dashboard):
+- `RAILWAY_PROJECT_ID` — project identifier
+- `RAILWAY_SERVICE_ID` — service identifier
+- `RAILWAY_ENVIRONMENT_ID` — environment identifier
 
 ### Check Railway Deployment Status
 ```bash
 curl -s -X POST https://backboard.railway.com/graphql/v2 \
   -H "Authorization: Bearer ${RAILWAY_ACCOUNT_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"query":"query { deployments(first: 3, input: { projectId: \"c57527ed-e599-42da-8f49-7fb30c6c4166\", environmentId: \"7932450e-bf32-4428-905e-de0c3dff381f\", serviceId: \"dac5966e-646e-4644-b3e9-cd31352f696d\" }) { edges { node { id status createdAt } } } }"}'
+  -d '{"query":"query { deployments(first: 3, input: { projectId: \"'"${RAILWAY_PROJECT_ID}"'\", environmentId: \"'"${RAILWAY_ENVIRONMENT_ID}"'\", serviceId: \"'"${RAILWAY_SERVICE_ID}"'\" }) { edges { node { id status createdAt } } } }"}'
 ```
 
 ## Cloudflare Deployment
@@ -111,7 +110,7 @@ Before any deployment:
 After deploying OpenClaw wrapper:
 ```bash
 AUTH=$(echo -n ":${SETUP_PASSWORD}" | base64)
-BASE="https://openclaw-production-4e3d.up.railway.app"
+BASE="${OPENCLAW_BASE_URL:-https://openclaw-production-4e3d.up.railway.app}"
 # Health check
 curl -s $BASE/healthz
 # Gateway status
