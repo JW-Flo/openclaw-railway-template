@@ -44,6 +44,14 @@
   let runnerSaving = $state(false);
   let runnerConfig = $state({});
 
+  // Scheduler / Model Pool
+  let schedulerLoading = $state(true);
+  let schedulerSaving = $state(false);
+  let schedulerStatus = $state(null);
+  let modelPool = $state({ models: [], scheduler: {} });
+  let addModelOpen = $state(false);
+  let newModel = $state({ id: '', provider: '', tier: 'standard', costPer1kTokens: 0, dailyLimit: 20, priority: 5, minTaskPriority: 1, maxTaskPriority: 10, enabled: true, capabilities: [] });
+
   // Debug info
   let debugLoading = $state(true);
   let debugInfo = $state(null);
@@ -174,17 +182,69 @@
     });
   }
 
+  async function loadScheduler() {
+    schedulerLoading = true;
+    try {
+      const [poolRes, statusRes] = await Promise.all([
+        api.get('/setup/api/scheduler/pool'),
+        api.get('/setup/api/scheduler/status'),
+      ]);
+      modelPool = { models: poolRes.models || [], scheduler: poolRes.scheduler || {} };
+      schedulerStatus = statusRes;
+    } catch { modelPool = { models: [], scheduler: {} }; schedulerStatus = null; }
+    schedulerLoading = false;
+  }
+
+  async function saveScheduler() {
+    schedulerSaving = true;
+    try {
+      await api.post('/setup/api/scheduler/pool', modelPool);
+      success('Scheduler config saved');
+      await loadScheduler();
+    } catch (err) { notifyError('Failed to save: ' + (err.body || err.message)); }
+    schedulerSaving = false;
+  }
+
+  async function toggleScheduler() {
+    try {
+      const res = await api.post('/setup/api/scheduler/toggle');
+      success(res.enabled ? 'Scheduler enabled' : 'Scheduler disabled');
+      await loadScheduler();
+    } catch (err) { notifyError('Toggle failed: ' + (err.body || err.message)); }
+  }
+
+  async function runSchedulerNow() {
+    try {
+      await api.post('/setup/api/scheduler/run-now');
+      success('Scheduler tick triggered');
+      setTimeout(loadScheduler, 3000);
+    } catch (err) { notifyError('Failed: ' + (err.body || err.message)); }
+  }
+
+  function addModel() {
+    if (!newModel.id.trim()) return;
+    modelPool.models = [...modelPool.models, { ...newModel, usedToday: 0, lastResetDate: '', capabilities: newModel.capabilities.length ? newModel.capabilities : ['code'] }];
+    newModel = { id: '', provider: '', tier: 'standard', costPer1kTokens: 0, dailyLimit: 20, priority: 5, minTaskPriority: 1, maxTaskPriority: 10, enabled: true, capabilities: [] };
+    addModelOpen = false;
+  }
+
+  function removeModel(index) {
+    modelPool.models = modelPool.models.filter((_, i) => i !== index);
+  }
+
   const tabs = [
     { id: 'connection', label: 'Connection', icon: 'wifi' },
+    { id: 'scheduler', label: 'Scheduler', icon: 'scheduler' },
     { id: 'tokens', label: 'API Tokens', icon: 'key' },
-    { id: 'runner', label: 'Runner Config', icon: 'cog' },
-    { id: 'ticker', label: 'News Ticker', icon: 'ticker' },
+    { id: 'runner', label: 'Runner', icon: 'cog' },
+    { id: 'ticker', label: 'Ticker', icon: 'ticker' },
     { id: 'debug', label: 'Debug', icon: 'bug' },
   ];
 
   function switchTab(id) {
     activeTab = id;
     if (id === 'connection' && !connData) loadConnection();
+    if (id === 'scheduler' && modelPool.models.length === 0) loadScheduler();
     if (id === 'tokens' && tokens.length === 0) loadTokens();
     if (id === 'runner' && !runnerConfig.maxConcurrent) loadRunnerConfig();
     if (id === 'ticker' && tickerLoading) loadTickerConfig();
@@ -196,6 +256,7 @@
     loadTokens();
     loadTickerConfig();
     loadRunnerConfig();
+    loadScheduler();
   });
 </script>
 
@@ -227,6 +288,10 @@
         {:else if tab.icon === 'ticker'}
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 7.5h1.5m-1.5 3h1.5m-7.5 3h7.5m-7.5 3h7.5m3-9h3.375c.621 0 1.125.504 1.125 1.125V18a2.25 2.25 0 01-2.25 2.25M16.5 7.5V18a2.25 2.25 0 002.25 2.25M16.5 7.5V4.875c0-.621-.504-1.125-1.125-1.125H4.125C3.504 3.75 3 4.254 3 4.875V18a2.25 2.25 0 002.25 2.25h13.5M6 7.5h3v3H6v-3z" />
+          </svg>
+        {:else if tab.icon === 'scheduler'}
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         {:else if tab.icon === 'bug'}
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
@@ -306,6 +371,249 @@
             </svg>
             Refresh
           </Button>
+        </div>
+      </div>
+    {/if}
+
+  <!-- ═══════ SCHEDULER TAB ═══════ -->
+  {:else if activeTab === 'scheduler'}
+    {#if schedulerLoading}
+      <div class="flex justify-center py-12"><Spinner size="lg" /></div>
+    {:else}
+      <div class="space-y-6">
+        <!-- Status banner -->
+        <div class="bg-surface border border-border rounded-2xl p-4">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-3">
+              <span class="w-3 h-3 rounded-full {schedulerStatus?.active ? 'bg-success' : schedulerStatus?.enabled ? 'bg-warning' : 'bg-text-3'}"
+                style="{schedulerStatus?.active ? 'animation: pulse 2s ease-in-out infinite;' : ''}"></span>
+              <span class="text-sm font-semibold text-text">
+                {schedulerStatus?.active ? 'Auto-Scheduler Running' : schedulerStatus?.enabled ? 'Enabled (waiting)' : 'Scheduler Disabled'}
+              </span>
+              {#if schedulerStatus?.inPauseWindow}
+                <Badge variant="warning">In pause window</Badge>
+              {/if}
+            </div>
+            <div class="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onclick={runSchedulerNow}>Run Now</Button>
+              <Button variant={modelPool.scheduler?.enabled ? 'danger' : 'primary'} size="sm" onclick={toggleScheduler}>
+                {modelPool.scheduler?.enabled ? 'Disable' : 'Enable'}
+              </Button>
+            </div>
+          </div>
+          {#if schedulerStatus}
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+              <div class="bg-bg rounded-xl p-2.5">
+                <div class="text-lg font-bold text-text">{schedulerStatus.pendingTasks}</div>
+                <div class="text-[10px] text-text-3 uppercase tracking-wider">Pending</div>
+              </div>
+              <div class="bg-bg rounded-xl p-2.5">
+                <div class="text-lg font-bold text-text">{schedulerStatus.runningTasks}</div>
+                <div class="text-[10px] text-text-3 uppercase tracking-wider">Running</div>
+              </div>
+              <div class="bg-bg rounded-xl p-2.5">
+                <div class="text-lg font-bold text-text">{schedulerStatus.tasksToday}/{schedulerStatus.dailyLimit}</div>
+                <div class="text-[10px] text-text-3 uppercase tracking-wider">Today</div>
+              </div>
+              <div class="bg-bg rounded-xl p-2.5">
+                <div class="text-lg font-bold text-accent-2">{modelPool.scheduler?.strategy || '--'}</div>
+                <div class="text-[10px] text-text-3 uppercase tracking-wider">Strategy</div>
+              </div>
+            </div>
+          {/if}
+        </div>
+
+        <!-- Scheduler Settings -->
+        <Card title="Scheduler Settings">
+          <div class="space-y-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm text-text-2 block mb-1">Strategy</label>
+                <select
+                  bind:value={modelPool.scheduler.strategy}
+                  class="w-full bg-bg border border-border rounded-xl px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/50"
+                >
+                  <option value="cost-optimized">Cost Optimized (smart routing)</option>
+                  <option value="quality-first">Quality First (best model)</option>
+                  <option value="cheapest-first">Cheapest First (save money)</option>
+                  <option value="round-robin">Round Robin (spread evenly)</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-sm text-text-2 block mb-1">Check Interval (seconds)</label>
+                <input type="number" min="60" max="86400" bind:value={modelPool.scheduler.intervalSeconds}
+                  class="w-full bg-bg border border-border rounded-xl px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/50" />
+              </div>
+              <div>
+                <label class="text-sm text-text-2 block mb-1">Max Concurrent</label>
+                <input type="number" min="1" max="5" bind:value={modelPool.scheduler.maxConcurrent}
+                  class="w-full bg-bg border border-border rounded-xl px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/50" />
+              </div>
+              <div>
+                <label class="text-sm text-text-2 block mb-1">Timezone</label>
+                <input type="text" bind:value={modelPool.scheduler.timezone}
+                  class="w-full bg-bg border border-border rounded-xl px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/50" />
+              </div>
+              <div>
+                <label class="text-sm text-text-2 block mb-1">Pause Start (HH:MM)</label>
+                <input type="text" placeholder="00:00" bind:value={modelPool.scheduler.pauseStart}
+                  class="w-full bg-bg border border-border rounded-xl px-3 py-2 text-sm text-text placeholder-text-3 focus:outline-none focus:border-accent/50" />
+              </div>
+              <div>
+                <label class="text-sm text-text-2 block mb-1">Pause End (HH:MM)</label>
+                <input type="text" placeholder="06:00" bind:value={modelPool.scheduler.pauseEnd}
+                  class="w-full bg-bg border border-border rounded-xl px-3 py-2 text-sm text-text placeholder-text-3 focus:outline-none focus:border-accent/50" />
+              </div>
+            </div>
+            <p class="text-[11px] text-text-3">
+              <strong>Cost Optimized:</strong> High-priority tasks (1-3) get premium models, low-priority (7-10) use free/cheap models.
+              <strong>Quality First:</strong> Always uses the best available model.
+              <strong>Cheapest First:</strong> Always uses the cheapest model.
+              <strong>Round Robin:</strong> Spreads tasks evenly across all models.
+            </p>
+          </div>
+        </Card>
+
+        <!-- Model Pool -->
+        <div class="flex items-center justify-between">
+          <h2 class="text-lg font-semibold text-text">Model Pool</h2>
+          <Button variant="primary" size="sm" onclick={() => addModelOpen = true}>
+            <svg class="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            Add Model
+          </Button>
+        </div>
+
+        <div class="space-y-2">
+          {#each modelPool.models as model, i}
+            <div class="bg-surface border border-border rounded-xl p-4 {!model.enabled ? 'opacity-50' : ''}">
+              <div class="flex items-center justify-between gap-3 mb-2">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="font-mono text-sm text-text font-semibold truncate">{model.id}</span>
+                  <Badge variant={model.tier === 'free' ? 'success' : model.tier === 'premium' ? 'warning' : 'info'}>
+                    {model.tier}
+                  </Badge>
+                  {#if !model.enabled}
+                    <Badge variant="default">Disabled</Badge>
+                  {/if}
+                </div>
+                <div class="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    class="text-xs text-text-3 hover:text-text cursor-pointer"
+                    onclick={() => { model.enabled = !model.enabled; }}
+                  >{model.enabled ? 'Disable' : 'Enable'}</button>
+                  <button
+                    class="text-xs text-danger/70 hover:text-danger cursor-pointer"
+                    onclick={() => removeModel(i)}
+                  >Remove</button>
+                </div>
+              </div>
+              <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+                <div>
+                  <span class="text-text-3">Cost:</span>
+                  <span class="text-text ml-1">{model.costPer1kTokens === 0 ? 'FREE' : `$${model.costPer1kTokens}/1k`}</span>
+                </div>
+                <div>
+                  <span class="text-text-3">Used:</span>
+                  <span class="text-text ml-1">{model.usedToday || 0}/{model.dailyLimit}</span>
+                </div>
+                <div>
+                  <span class="text-text-3">Priority:</span>
+                  <span class="text-text ml-1">#{model.priority}</span>
+                </div>
+                <div>
+                  <span class="text-text-3">Tasks:</span>
+                  <span class="text-text ml-1">P{model.minTaskPriority}-{model.maxTaskPriority}</span>
+                </div>
+                <div>
+                  <span class="text-text-3">Provider:</span>
+                  <span class="text-text ml-1">{model.provider}</span>
+                </div>
+              </div>
+              <!-- Usage bar -->
+              <div class="mt-2 h-1.5 bg-bg rounded-full overflow-hidden">
+                <div
+                  class="h-full rounded-full transition-all duration-300 {(model.usedToday || 0) / model.dailyLimit > 0.8 ? 'bg-danger' : 'bg-accent'}"
+                  style="width: {Math.min(100, ((model.usedToday || 0) / model.dailyLimit) * 100)}%"
+                ></div>
+              </div>
+            </div>
+          {/each}
+        </div>
+
+        <div class="flex justify-end gap-2">
+          <Button variant="secondary" onclick={loadScheduler}>Refresh</Button>
+          <Button variant="primary" loading={schedulerSaving} onclick={saveScheduler}>Save Scheduler Config</Button>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Add Model Dialog -->
+    {#if addModelOpen}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+        onclick={(e) => { if (e.target === e.currentTarget) addModelOpen = false; }}>
+        <div class="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md" style="animation: fadeIn 0.15s ease;">
+          <div class="px-6 py-4 border-b border-border">
+            <h2 class="text-lg font-semibold text-text">Add Model to Pool</h2>
+          </div>
+          <div class="px-6 py-4 space-y-3">
+            <div>
+              <label class="text-xs text-text-3 block mb-1">Model ID</label>
+              <input bind:value={newModel.id} placeholder="e.g. openrouter/anthropic/claude-sonnet-4"
+                class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text placeholder-text-3 focus:outline-none focus:border-accent/50" />
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="text-xs text-text-3 block mb-1">Provider</label>
+                <input bind:value={newModel.provider} placeholder="openrouter"
+                  class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text placeholder-text-3 focus:outline-none focus:border-accent/50" />
+              </div>
+              <div>
+                <label class="text-xs text-text-3 block mb-1">Tier</label>
+                <select bind:value={newModel.tier} class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/50">
+                  <option value="free">Free</option>
+                  <option value="standard">Standard</option>
+                  <option value="premium">Premium</option>
+                </select>
+              </div>
+            </div>
+            <div class="grid grid-cols-3 gap-3">
+              <div>
+                <label class="text-xs text-text-3 block mb-1">$/1k tokens</label>
+                <input type="number" step="0.001" min="0" bind:value={newModel.costPer1kTokens}
+                  class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/50" />
+              </div>
+              <div>
+                <label class="text-xs text-text-3 block mb-1">Daily Limit</label>
+                <input type="number" min="1" max="200" bind:value={newModel.dailyLimit}
+                  class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/50" />
+              </div>
+              <div>
+                <label class="text-xs text-text-3 block mb-1">Quality Priority</label>
+                <input type="number" min="1" max="20" bind:value={newModel.priority}
+                  class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/50" />
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="text-xs text-text-3 block mb-1">Min Task Priority</label>
+                <input type="number" min="1" max="10" bind:value={newModel.minTaskPriority}
+                  class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/50" />
+              </div>
+              <div>
+                <label class="text-xs text-text-3 block mb-1">Max Task Priority</label>
+                <input type="number" min="1" max="10" bind:value={newModel.maxTaskPriority}
+                  class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text focus:outline-none focus:border-accent/50" />
+              </div>
+            </div>
+          </div>
+          <div class="px-6 py-4 border-t border-border flex justify-end gap-2">
+            <Button variant="ghost" onclick={() => addModelOpen = false}>Cancel</Button>
+            <Button variant="primary" onclick={addModel}>Add Model</Button>
+          </div>
         </div>
       </div>
     {/if}
