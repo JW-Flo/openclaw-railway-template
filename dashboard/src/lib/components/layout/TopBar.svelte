@@ -2,9 +2,11 @@
   import { page } from '$app/stores';
   import { base } from '$app/paths';
   import { health, connection } from '$lib/stores/health.js';
+  import { user, logout } from '$lib/stores/auth.js';
   import { api } from '$lib/api/client.js';
   import { success, error as notifyError } from '$lib/stores/notifications.js';
   import Button from '$lib/components/shared/Button.svelte';
+  import Badge from '$lib/components/shared/Badge.svelte';
 
   let { onToggleSidebar = () => {} } = $props();
 
@@ -138,6 +140,25 @@
       </svg>
       <span class="hidden md:inline">Doctor</span>
     </Button>
+
+    <!-- User -->
+    {#if $user}
+      <div class="hidden sm:flex items-center gap-2 pl-2 border-l border-border/50">
+        <div class="text-right">
+          <span class="text-[11px] font-medium text-text block leading-tight">{$user.displayName || $user.username}</span>
+          <span class="text-[10px] text-accent-2/70">{$user.role}</span>
+        </div>
+        <button
+          class="text-text-3 hover:text-text p-1 rounded-lg hover:bg-surface-2 transition-colors cursor-pointer"
+          title="Sign out"
+          onclick={async () => { await logout(); window.location.href = '/dashboard/login'; }}
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
+          </svg>
+        </button>
+      </div>
+    {/if}
   </div>
 </header>
 
