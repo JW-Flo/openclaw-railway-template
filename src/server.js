@@ -1082,15 +1082,20 @@ app.get("/setup/api/skills/check", requireSetupAuth, async (_req, res) => {
   return res.json({ ok: r.code === 0, output: r.output });
 });
 
+const SKILL_NAME_RE = /^[a-zA-Z0-9_@/.:-]+$/;
+
 app.post("/setup/api/skills/install", requireSetupAuth, async (req, res) => {
   const { source, force } = req.body || {};
   if (!source || typeof source !== "string") {
     return res.status(400).json({ ok: false, error: "Missing source (e.g. clawhub slug or github:user/repo)" });
   }
   const src = source.trim();
-  const clawHubArgs = ["clawhub@latest", "install", src, "--no-input", "--workdir", WORKSPACE_DIR];
-  if (force) clawHubArgs.push("--force");
-  const r = await runCmd("npx", clawHubArgs);
+  if (!SKILL_NAME_RE.test(src)) {
+    return res.status(400).json({ ok: false, error: "Invalid source format" });
+  }
+  const clawHubArgs = ["install", src, "--no-input", "--workdir", WORKSPACE_DIR];
+  if (force === true) clawHubArgs.push("--force");
+  const r = await runCmd("clawhub", clawHubArgs);
   return res.json({ ok: r.code === 0, output: r.output });
 });
 
@@ -1099,7 +1104,11 @@ app.post("/setup/api/skills/uninstall", requireSetupAuth, async (req, res) => {
   if (!name || typeof name !== "string") {
     return res.status(400).json({ ok: false, error: "Missing skill name" });
   }
-  const r = await runCmd("clawhub", ["uninstall", name.trim(), "--no-input", "--workdir", WORKSPACE_DIR]);
+  const n = name.trim();
+  if (!SKILL_NAME_RE.test(n)) {
+    return res.status(400).json({ ok: false, error: "Invalid skill name" });
+  }
+  const r = await runCmd("clawhub", ["uninstall", n, "--no-input", "--workdir", WORKSPACE_DIR]);
   return res.json({ ok: r.code === 0, output: r.output });
 });
 
@@ -1108,14 +1117,19 @@ app.post("/setup/api/skills/search", requireSetupAuth, async (req, res) => {
   if (!query || typeof query !== "string") {
     return res.status(400).json({ ok: false, error: "Missing search query" });
   }
-  const r = await runCmd("npx", ["clawhub@latest", "search", ...query.trim().split(/\s+/), "--no-input"]);
+  const q = query.trim().substring(0, 200);
+  const words = q.split(/\s+/).filter(w => /^[a-zA-Z0-9_-]+$/.test(w));
+  if (words.length === 0) {
+    return res.status(400).json({ ok: false, error: "Invalid search query" });
+  }
+  const r = await runCmd("clawhub", ["search", ...words, "--no-input"]);
   return res.json({ ok: r.code === 0, output: r.output });
 });
 
 app.get("/setup/api/skills/info/:name", requireSetupAuth, async (req, res) => {
   const name = req.params.name;
-  if (!name) {
-    return res.status(400).json({ ok: false, error: "Missing skill name" });
+  if (!name || !SKILL_NAME_RE.test(name)) {
+    return res.status(400).json({ ok: false, error: "Invalid skill name" });
   }
   const r = await runCmd(OPENCLAW_NODE, clawArgs(["skills", "info", name]));
   return res.json({ ok: r.code === 0, output: r.output });

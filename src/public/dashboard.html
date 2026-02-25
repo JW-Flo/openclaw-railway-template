@@ -555,6 +555,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
         tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--text2);padding:24px">No skills found. Install skills from ClawHub below.</td></tr>';
         return;
       }
+      function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
       let rows = "";
       const seen = new Set();
       for (const line of lines) {
@@ -565,6 +566,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
         const rawName = cells[1].replace(/^[\s\S]{1,4}\s+/, "").trim();
         if (!rawName || seen.has(rawName)) continue;
         seen.add(rawName);
+        const safeName = esc(rawName);
         const isReady = status.includes("ready");
         const source = cells[3] || "";
         const isWorkspace = source.includes("workspace");
@@ -572,20 +574,34 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
           ? dot("green") + " Ready"
           : dot("red") + " Missing";
         const actionBtn = isWorkspace
-          ? '<button class="btn" onclick="uninstallSkill(\'' + rawName + '\')" style="padding:4px 10px;font-size:12px">Uninstall</button>'
+          ? '<button class="btn" onclick="uninstallSkill(\'' + safeName + '\')" style="padding:4px 10px;font-size:12px">Uninstall</button>'
           : '<span style="color:var(--text2);font-size:11px">bundled</span>';
         rows += '<tr>' +
-          '<td style="font-weight:600;font-family:var(--mono);font-size:12px">' + rawName + '</td>' +
+          '<td style="font-weight:600;font-family:var(--mono);font-size:12px">' + safeName + '</td>' +
           '<td>' + statusHtml + '</td>' +
           '<td>' + actionBtn + '</td></tr>';
       }
       if (!rows) {
-        tbody.innerHTML = '<tr><td colspan="3" style="font-family:var(--mono);font-size:12px;white-space:pre-wrap;padding:12px">' + output + '</td></tr>';
+        tbody.innerHTML = "";
+        const cell = document.createElement("td");
+        cell.colSpan = 3;
+        cell.style.cssText = "font-family:var(--mono);font-size:12px;white-space:pre-wrap;padding:12px";
+        cell.textContent = output;
+        const tr = document.createElement("tr");
+        tr.appendChild(cell);
+        tbody.appendChild(tr);
       } else {
         tbody.innerHTML = rows;
       }
     } catch (err) {
-      tbody.innerHTML = '<tr><td colspan="3" style="color:var(--red);padding:12px">Error loading skills: ' + err.message + '</td></tr>';
+      tbody.innerHTML = "";
+      const cell = document.createElement("td");
+      cell.colSpan = 3;
+      cell.style.cssText = "color:var(--red);padding:12px";
+      cell.textContent = "Error loading skills: " + err.message;
+      const tr = document.createElement("tr");
+      tr.appendChild(cell);
+      tbody.appendChild(tr);
     }
   }
 

@@ -33,10 +33,8 @@ Skills extend the agent's capabilities with specialized behaviors. They are load
 openclaw skills list
 # List only eligible (runnable) skills
 openclaw skills list --eligible
-# Enable a skill
-openclaw skills enable <skill-name>
-# Disable a skill
-openclaw skills disable <skill-name>
+# Check skill requirements
+openclaw skills check
 # Get info about a skill
 openclaw skills info <skill-name>
 # Install from GitHub

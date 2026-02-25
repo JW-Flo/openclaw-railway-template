@@ -57,7 +57,6 @@ RUN mkdir -p /home/openclaw/.local/bin \
   && for cmd in clawhub summarize mcporter xurl obsidian-cli oracle gemini; do \
        case "$cmd" in \
          gemini) pkg="@google/gemini-cli" ;; \
-         claude) pkg="@anthropic-ai/claude-code" ;; \
          *) pkg="$cmd" ;; \
        esac; \
        printf '#!/bin/sh\nexec npx %s@latest "$@"\n' "$pkg" > "/home/openclaw/.local/bin/$cmd"; \
