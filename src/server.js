@@ -1435,7 +1435,7 @@ app.use(
 app.get("/dashboard", requireSetupAuth, (_req, res) => {
   res.sendFile(path.join(dashboardBuildDir, "index.html"));
 });
-app.get("/dashboard/*", requireSetupAuth, (_req, res) => {
+app.get("/dashboard/{*path}", requireSetupAuth, (_req, res) => {
   res.sendFile(path.join(dashboardBuildDir, "index.html"));
 });
 
