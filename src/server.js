@@ -1395,11 +1395,19 @@ app.post("/setup/api/runner/config", requireSetupAuth, (req, res) => {
     if (key in updates) queue.config[key] = updates[key];
   }
   if (updates.engines && typeof updates.engines === "object" && !Array.isArray(updates.engines)) {
-    const safeEngines = {};
+    if (!queue.config.engines) queue.config.engines = {};
+    const allowedEngineKeys = ["enabled", "model", "timeout", "note"];
     for (const [k, v] of Object.entries(updates.engines)) {
-      if (k !== "__proto__" && k !== "constructor" && k !== "prototype") safeEngines[k] = v;
+      if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
+      if (typeof v === "object" && v !== null && !Array.isArray(v)
+          && typeof queue.config.engines[k] === "object" && queue.config.engines[k] !== null) {
+        for (const ek of allowedEngineKeys) {
+          if (ek in v) queue.config.engines[k][ek] = v[ek];
+        }
+      } else {
+        queue.config.engines[k] = v;
+      }
     }
-    queue.config.engines = { ...queue.config.engines, ...safeEngines };
   }
   writeTaskQueue(queue);
   return res.json({ ok: true, config: queue.config });

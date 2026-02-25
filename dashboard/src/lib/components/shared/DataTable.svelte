@@ -49,7 +49,7 @@
               {#each columns as col}
                 <td class="px-4 py-3 text-sm border-b border-border/50 transition-colors duration-150 group-hover:bg-surface-2/30">
                   {#if renderCell}
-                    {@html renderCell(row, col)}
+                    {renderCell(row, col)}
                   {:else}
                     {row[col.key] ?? ''}
                   {/if}

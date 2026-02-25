@@ -14,8 +14,19 @@ async function request(method, path, body) {
   }
   const res = await fetch(path, opts);
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new ApiError(res.status, text);
+    const ct = res.headers.get('content-type') || '';
+    let body;
+    if (ct.includes('application/json')) {
+      try {
+        const json = await res.json();
+        body = json.error || json.message || JSON.stringify(json);
+      } catch {
+        body = await res.text().catch(() => '');
+      }
+    } else {
+      body = await res.text().catch(() => '');
+    }
+    throw new ApiError(res.status, body);
   }
   const contentType = res.headers.get('content-type') || '';
   if (contentType.includes('application/json')) {

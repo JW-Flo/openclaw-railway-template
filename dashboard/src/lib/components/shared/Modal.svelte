@@ -1,4 +1,6 @@
 <script>
+  import { tick } from 'svelte';
+
   let {
     open = $bindable(false),
     title = '',
@@ -13,6 +15,26 @@
     lg: 'max-w-2xl',
   };
 
+  let dialogEl = $state(null);
+  let previousFocus = $state(null);
+
+  const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+  $effect(() => {
+    if (open) {
+      previousFocus = document.activeElement;
+      tick().then(() => {
+        if (dialogEl) {
+          const focusable = dialogEl.querySelectorAll(FOCUSABLE);
+          if (focusable.length) focusable[0].focus();
+        }
+      });
+    } else if (previousFocus) {
+      previousFocus.focus();
+      previousFocus = null;
+    }
+  });
+
   function handleOverlayClick(e) {
     if (e.target === e.currentTarget) {
       open = false;
@@ -22,6 +44,20 @@
   function handleKeydown(e) {
     if (e.key === 'Escape') {
       open = false;
+      return;
+    }
+    if (e.key === 'Tab' && dialogEl) {
+      const focusable = [...dialogEl.querySelectorAll(FOCUSABLE)];
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     }
   }
 </script>
@@ -35,7 +71,7 @@
     class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 modal-overlay"
     onclick={handleOverlayClick}
   >
-    <div class="bg-surface border border-border rounded-2xl shadow-2xl shadow-black/50 w-full {sizeClasses[size]} modal-content">
+    <div bind:this={dialogEl} class="bg-surface border border-border rounded-2xl shadow-2xl shadow-black/50 w-full {sizeClasses[size]} modal-content">
       <!-- Header -->
       <div class="flex items-center justify-between px-6 py-4 border-b border-border">
         <h2 class="text-lg font-semibold text-text">{title}</h2>

@@ -112,14 +112,18 @@
     }
   }
 
-  onMount(loadQueue);
+  let projects = $state([]);
 
-  const projects = [
-    'JW-Flo/Project-AtlasIT',
-    'JW-Flo/AWhittleWandering',
-    'JW-Flo/market_agents',
-    'JW-Flo/JW-Site',
-  ];
+  async function loadProjects() {
+    try {
+      const data = await api.get('/setup/api/projects/status');
+      projects = (data.projects || []).map(p => p.name || p.path || '');
+    } catch {
+      projects = ['JW-Flo/Project-AtlasIT', 'JW-Flo/AWhittleWandering', 'JW-Flo/market_agents', 'JW-Flo/JW-Site'];
+    }
+  }
+
+  onMount(() => { loadQueue(); loadProjects(); });
 
   let sortedTasks = $derived([...tasks].sort((a, b) => (a.priority || 5) - (b.priority || 5)));
 </script>

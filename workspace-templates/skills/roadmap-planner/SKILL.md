@@ -191,7 +191,7 @@ QUEUE=$(cat /data/.openclaw/task-queue.json 2>/dev/null || echo '{"tasks":[],"hi
 # To add tasks, use the wrapper API (preferred method):
 # This requires the SETUP_PASSWORD env var and the wrapper to be running
 AUTH=$(echo -n ":${SETUP_PASSWORD}" | base64)
-BASE="https://openclaw-production-4e3d.up.railway.app"
+BASE="http://localhost:${PORT:-8080}"
 
 curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
   "$BASE/setup/api/runner/add" \
