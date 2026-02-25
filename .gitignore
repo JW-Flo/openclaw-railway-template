@@ -7,6 +7,8 @@ npm-debug.log*
 
 # Build artifacts
 /dist
+dashboard/build
+dashboard/.svelte-kit
 
 # Backup exports
 *.tar.gz

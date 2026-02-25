@@ -163,6 +163,10 @@ Edit `buildOnboardArgs()` (src/server.js:442-496) to add new CLI flags or auth p
 2. Add config-writing logic in `/setup/api/run` handler (src/server.js)
 3. Update client JS to collect the fields (src/public/setup-app.js)
 
+## Timezone
+
+The user operates in **CST (Central Standard Time, America/Chicago)**. All cron jobs, timestamps in the UI, and time-related configurations should default to `America/Chicago`. The server itself runs in UTC, but user-facing times should be in CST/CDT.
+
 ## Live Instance
 
 - **URL**: `https://openclaw-production-4e3d.up.railway.app`
@@ -172,7 +176,7 @@ Edit `buildOnboardArgs()` (src/server.js:442-496) to add new CLI flags or auth p
 - **Current Provider**: xAI/Grok (`xai/grok-4`)
 - **Fallbacks**: `xai/grok-4-fast`, `xai/grok-3`
 - **Agent timeout**: 180 seconds
-- **Cron jobs**: `daily-health-check` (9 AM ET), `hourly-heartbeat` (every 1h)
+- **Cron jobs**: `daily-health-check` (9 AM CT), `hourly-heartbeat` (every 1h)
 - **Agent personality**: Addresses user as "Joe" or "Overlord" (see workspace SOUL.md)
 
 ### Railway Project
@@ -364,7 +368,7 @@ curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/js
 # Add a new cron job
 curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
   .../setup/api/openclaw-cmd \
-  -d '{"args":["cron","add","--name","my-job","--cron","0 9 * * *","--tz","America/New_York","--system-event","Description of what to do","--timeout-seconds","300","--session","main","--json"]}'
+  -d '{"args":["cron","add","--name","my-job","--cron","0 9 * * *","--tz","America/Chicago","--system-event","Description of what to do","--timeout-seconds","300","--session","main","--json"]}'
 # Check cron scheduler status
 curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
   .../setup/api/openclaw-cmd -d '{"args":["cron","status"]}'

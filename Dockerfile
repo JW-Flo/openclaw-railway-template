@@ -32,6 +32,12 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile --prod
 
+# Build SvelteKit dashboard (separate layer for caching)
+COPY dashboard/package.json ./dashboard/
+RUN cd dashboard && npm install
+COPY dashboard/ ./dashboard/
+RUN cd dashboard && npm run build
+
 COPY src ./src
 COPY workspace-templates ./workspace-templates
 COPY entrypoint.sh ./entrypoint.sh
