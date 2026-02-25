@@ -48,6 +48,34 @@ function resolveGatewayToken() {
 const OPENCLAW_GATEWAY_TOKEN = resolveGatewayToken();
 process.env.OPENCLAW_GATEWAY_TOKEN = OPENCLAW_GATEWAY_TOKEN;
 
+function readTaskQueue() {
+  const queuePath = path.join(STATE_DIR, "task-queue.json");
+  try {
+    return JSON.parse(fs.readFileSync(queuePath, "utf8"));
+  } catch {
+    const defaultQueue = {
+      tasks: [],
+      history: [],
+      config: {
+        maxConcurrent: 1,
+        pauseBetweenTasks: 300,
+        dailyTaskLimit: 12,
+        paused: false,
+        engines: {
+          openclaw: { enabled: true, model: "xai/grok-4", timeout: 180 },
+        },
+      },
+    };
+    fs.writeFileSync(queuePath, JSON.stringify(defaultQueue, null, 2));
+    return defaultQueue;
+  }
+}
+
+function writeTaskQueue(queue) {
+  const queuePath = path.join(STATE_DIR, "task-queue.json");
+  fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
+}
+
 let cachedOpenclawVersion = null;
 let cachedChannelsHelp = null;
 
@@ -1258,8 +1286,137 @@ app.post("/setup/api/shell", requireSetupAuth, async (req, res) => {
   return res.json({ ok: r.code === 0, code: r.code, output: r.output });
 });
 
+// ── Runner / Task Queue API ──────────────────────────────────────────────
+
+// Get the full queue (tasks + config)
+app.get("/setup/api/runner/queue", requireSetupAuth, (_req, res) => {
+  const queue = readTaskQueue();
+  return res.json({ ok: true, tasks: queue.tasks, config: queue.config });
+});
+
+// Add a task to the queue
+app.post("/setup/api/runner/add", requireSetupAuth, (req, res) => {
+  const { project, title, description, priority } = req.body || {};
+  if (!title || typeof title !== "string") {
+    return res.status(400).json({ ok: false, error: "Missing required field: title" });
+  }
+  const queue = readTaskQueue();
+  const task = {
+    id: crypto.randomUUID(),
+    project: project || null,
+    title,
+    description: description || "",
+    priority: typeof priority === "number" ? priority : 3,
+    status: "pending",
+    createdAt: new Date().toISOString(),
+  };
+  queue.tasks.push(task);
+  writeTaskQueue(queue);
+  return res.json({ ok: true, task });
+});
+
+// Remove a task by id
+app.post("/setup/api/runner/remove", requireSetupAuth, (req, res) => {
+  const { id } = req.body || {};
+  if (!id) {
+    return res.status(400).json({ ok: false, error: "Missing required field: id" });
+  }
+  const queue = readTaskQueue();
+  const idx = queue.tasks.findIndex((t) => t.id === id);
+  if (idx === -1) {
+    return res.status(404).json({ ok: false, error: "Task not found" });
+  }
+  queue.tasks.splice(idx, 1);
+  writeTaskQueue(queue);
+  return res.json({ ok: true });
+});
+
+// Change task priority
+app.post("/setup/api/runner/reorder", requireSetupAuth, (req, res) => {
+  const { id, priority } = req.body || {};
+  if (!id) {
+    return res.status(400).json({ ok: false, error: "Missing required field: id" });
+  }
+  if (typeof priority !== "number") {
+    return res.status(400).json({ ok: false, error: "Missing required field: priority (number)" });
+  }
+  const queue = readTaskQueue();
+  const task = queue.tasks.find((t) => t.id === id);
+  if (!task) {
+    return res.status(404).json({ ok: false, error: "Task not found" });
+  }
+  task.priority = priority;
+  writeTaskQueue(queue);
+  return res.json({ ok: true, task });
+});
+
+// Get runner status
+app.get("/setup/api/runner/status", requireSetupAuth, (_req, res) => {
+  const queue = readTaskQueue();
+  const currentTask = queue.tasks.find((t) => t.status === "running") || null;
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayIso = todayStart.toISOString();
+  const tasksToday = queue.history.filter(
+    (h) => h.completedAt && h.completedAt >= todayIso,
+  ).length;
+  return res.json({
+    ok: true,
+    paused: queue.config.paused,
+    currentTask,
+    tasksToday,
+    nextRun: "see cron",
+  });
+});
+
+// Get task history (last 50 entries)
+app.get("/setup/api/runner/history", requireSetupAuth, (_req, res) => {
+  const queue = readTaskQueue();
+  const history = (queue.history || []).slice(-50);
+  return res.json({ ok: true, history });
+});
+
+// Update runner config (partial merge)
+app.post("/setup/api/runner/config", requireSetupAuth, (req, res) => {
+  const updates = req.body || {};
+  if (typeof updates !== "object" || Array.isArray(updates)) {
+    return res.status(400).json({ ok: false, error: "Body must be a JSON object" });
+  }
+  const queue = readTaskQueue();
+  // Deep merge engines if provided
+  if (updates.engines && typeof updates.engines === "object") {
+    queue.config.engines = { ...queue.config.engines, ...updates.engines };
+    delete updates.engines;
+  }
+  Object.assign(queue.config, updates);
+  writeTaskQueue(queue);
+  return res.json({ ok: true, config: queue.config });
+});
+
+// Toggle pause
+app.post("/setup/api/runner/pause", requireSetupAuth, (req, res) => {
+  const { paused } = req.body || {};
+  if (typeof paused !== "boolean") {
+    return res.status(400).json({ ok: false, error: "Missing required field: paused (boolean)" });
+  }
+  const queue = readTaskQueue();
+  queue.config.paused = paused;
+  writeTaskQueue(queue);
+  return res.json({ ok: true, paused: queue.config.paused });
+});
+
+// Serve SvelteKit dashboard build output (static files)
+const dashboardBuildDir = path.join(process.cwd(), "dashboard", "build");
+app.use(
+  "/dashboard",
+  requireSetupAuth,
+  express.static(dashboardBuildDir, { maxAge: "1h", index: false }),
+);
 app.get("/dashboard", requireSetupAuth, (_req, res) => {
-  res.sendFile(path.join(process.cwd(), "src", "public", "dashboard.html"));
+  res.sendFile(path.join(dashboardBuildDir, "index.html"));
+});
+app.get("/dashboard/*", requireSetupAuth, (_req, res) => {
+  res.sendFile(path.join(dashboardBuildDir, "index.html"));
 });
 
 app.get("/tui", requireSetupAuth, (_req, res) => {
