@@ -28,7 +28,7 @@
   let newJob = $state({
     name: '',
     schedule: '0 9 * * *',
-    timezone: 'America/New_York',
+    timezone: 'America/Chicago',
     description: '',
     timeout: 300,
     session: 'main',
@@ -38,7 +38,7 @@
     newJob = {
       name: '',
       schedule: '0 9 * * *',
-      timezone: 'America/New_York',
+      timezone: 'America/Chicago',
       description: '',
       timeout: 300,
       session: 'main',
@@ -186,7 +186,7 @@
   let schedulerBadge = $derived(parseSchedulerBadge(schedulerStatus));
 
   const TIMEZONES = [
-    'America/New_York',
+    'America/Chicago',
     'America/Chicago',
     'America/Denver',
     'America/Los_Angeles',
