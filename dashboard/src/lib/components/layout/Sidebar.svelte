@@ -69,8 +69,16 @@
 >
   <!-- Logo -->
   <div class="px-5 py-5 border-b border-border">
-    <a href="{base}/overview" class="text-lg font-bold text-text">
-      J<span class="text-accent-2">Claw</span>
+    <a href="{base}/overview" class="flex items-center gap-2.5 group">
+      <span class="w-8 h-8 rounded-lg bg-accent/15 flex items-center justify-center group-hover:bg-accent/25 transition-colors duration-300">
+        <svg class="w-4 h-4 text-accent-2" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2L4 7v10l8 5 8-5V7l-8-5zm0 2.18L18 8v8l-6 3.82L6 16V8l6-3.82z"/>
+          <path d="M12 8a4 4 0 100 8 4 4 0 000-8zm0 2a2 2 0 110 4 2 2 0 010-4z" opacity="0.7"/>
+        </svg>
+      </span>
+      <span class="text-base font-semibold tracking-wide text-text">
+        J<span class="text-accent-2">Claw</span>
+      </span>
     </a>
   </div>
 
