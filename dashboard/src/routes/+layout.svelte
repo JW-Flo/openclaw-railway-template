@@ -19,8 +19,10 @@
   <Sidebar bind:open={sidebarOpen} />
   <div class="flex-1 flex flex-col min-w-0 md:ml-64">
     <TopBar onToggleSidebar={() => sidebarOpen = !sidebarOpen} />
-    <main class="flex-1 overflow-y-auto p-6">
-      {@render children()}
+    <main class="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col">
+      <div class="flex-1 min-h-0">
+        {@render children()}
+      </div>
     </main>
   </div>
 </div>

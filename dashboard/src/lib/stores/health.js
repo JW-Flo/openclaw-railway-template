@@ -3,6 +3,7 @@ import { api } from '$lib/api/client.js';
 
 export const health = writable(null);
 export const healthLoading = writable(false);
+export const connection = writable({ connected: false, gateway: false, uptime: 0, memory: 0 });
 
 let pollInterval;
 
@@ -11,7 +12,6 @@ export async function loadHealth() {
   try {
     const data = await api.get('/setup/healthz');
     // Normalize: /setup/healthz returns gatewayRunning (bool) + gatewayStarting (bool)
-    // Convert to a simpler gateway status string for components
     if (data && !data.gateway) {
       data.gateway = data.gatewayRunning ? 'running'
         : data.gatewayStarting ? 'starting'
@@ -25,9 +25,28 @@ export async function loadHealth() {
   }
 }
 
+export async function loadConnection() {
+  try {
+    const data = await api.get('/setup/api/connection');
+    connection.set({
+      connected: data.connected || false,
+      gateway: data.gateway || false,
+      uptime: data.uptime || 0,
+      memory: data.memory || 0,
+      timestamp: data.timestamp,
+    });
+  } catch {
+    connection.set({ connected: false, gateway: false, uptime: 0, memory: 0 });
+  }
+}
+
 export function startHealthPolling(ms = 30000) {
   loadHealth();
-  pollInterval = setInterval(loadHealth, ms);
+  loadConnection();
+  pollInterval = setInterval(() => {
+    loadHealth();
+    loadConnection();
+  }, ms);
 }
 
 export function stopHealthPolling() {
