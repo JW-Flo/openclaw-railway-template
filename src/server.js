@@ -1049,6 +1049,15 @@ function requireSetupAuth(req, res, next) {
     return res.status(429).type("text/plain").send("Too many requests. Try again later.");
   }
 
+  // Also accept dashboard session cookies (so SvelteKit dashboard API calls work)
+  const cookieToken = (req.headers.cookie || "").split(";").map(c => c.trim()).find(c => c.startsWith("jclaw_session="));
+  const sessionToken = cookieToken ? cookieToken.split("=")[1] : req.headers["x-dashboard-token"];
+  const sessionUser = validateSession(sessionToken);
+  if (sessionUser) {
+    req.dashUser = sessionUser;
+    return next();
+  }
+
   const header = req.headers.authorization || "";
   const [scheme, encoded] = header.split(" ");
   if (scheme !== "Basic" || !encoded) {
@@ -1065,6 +1074,7 @@ function requireSetupAuth(req, res, next) {
     res.set("WWW-Authenticate", 'Basic realm="JClaw Setup"');
     return res.status(401).send("Invalid password");
   }
+  req.dashUser = { id: "basic-auth", username: "owner", role: "owner", displayName: "Owner" };
   return next();
 }
 
@@ -1977,13 +1987,13 @@ app.post("/setup/api/shell", requireSetupAuth, async (req, res) => {
 // ── Runner / Task Queue API ──────────────────────────────────────────────
 
 // Get the full queue (tasks + config)
-app.get("/setup/api/runner/queue", requireSetupAuth, (_req, res) => {
+app.get("/setup/api/runner/queue", requireDashAuth, (_req, res) => {
   const queue = readTaskQueue();
   return res.json({ ok: true, tasks: queue.tasks, config: queue.config });
 });
 
 // Add a task to the queue
-app.post("/setup/api/runner/add", requireSetupAuth, (req, res) => {
+app.post("/setup/api/runner/add", requireDashAuth, (req, res) => {
   const { project, title, description, priority } = req.body || {};
   if (!title || typeof title !== "string" || title.length > 500) {
     return res.status(400).json({ ok: false, error: "title is required (string, max 500 chars)" });
@@ -2011,7 +2021,7 @@ app.post("/setup/api/runner/add", requireSetupAuth, (req, res) => {
 });
 
 // Remove a task by id
-app.post("/setup/api/runner/remove", requireSetupAuth, (req, res) => {
+app.post("/setup/api/runner/remove", requireDashAuth, (req, res) => {
   const { id } = req.body || {};
   if (!id) {
     return res.status(400).json({ ok: false, error: "Missing required field: id" });
@@ -2027,7 +2037,7 @@ app.post("/setup/api/runner/remove", requireSetupAuth, (req, res) => {
 });
 
 // Change task priority
-app.post("/setup/api/runner/reorder", requireSetupAuth, (req, res) => {
+app.post("/setup/api/runner/reorder", requireDashAuth, (req, res) => {
   const { id, priority } = req.body || {};
   if (!id) {
     return res.status(400).json({ ok: false, error: "Missing required field: id" });
@@ -2046,7 +2056,7 @@ app.post("/setup/api/runner/reorder", requireSetupAuth, (req, res) => {
 });
 
 // Get runner status
-app.get("/setup/api/runner/status", requireSetupAuth, (_req, res) => {
+app.get("/setup/api/runner/status", requireDashAuth, (_req, res) => {
   const queue = readTaskQueue();
   const currentTask = queue.tasks.find((t) => t.status === "running") || null;
   const todayStart = new Date();
@@ -2065,14 +2075,14 @@ app.get("/setup/api/runner/status", requireSetupAuth, (_req, res) => {
 });
 
 // Get task history (last 50 entries)
-app.get("/setup/api/runner/history", requireSetupAuth, (_req, res) => {
+app.get("/setup/api/runner/history", requireDashAuth, (_req, res) => {
   const queue = readTaskQueue();
   const history = (queue.history || []).slice(-50);
   return res.json({ ok: true, history });
 });
 
 // Update runner config (whitelist-based merge to prevent prototype pollution)
-app.post("/setup/api/runner/config", requireSetupAuth, (req, res) => {
+app.post("/setup/api/runner/config", requireDashAuth, (req, res) => {
   const updates = req.body || {};
   if (typeof updates !== "object" || Array.isArray(updates)) {
     return res.status(400).json({ ok: false, error: "Body must be a JSON object" });
@@ -2102,7 +2112,7 @@ app.post("/setup/api/runner/config", requireSetupAuth, (req, res) => {
 });
 
 // Toggle pause
-app.post("/setup/api/runner/pause", requireSetupAuth, (req, res) => {
+app.post("/setup/api/runner/pause", requireDashAuth, (req, res) => {
   const { paused } = req.body || {};
   if (typeof paused !== "boolean") {
     return res.status(400).json({ ok: false, error: "Missing required field: paused (boolean)" });
@@ -3233,7 +3243,7 @@ app.get("/setup/api/events", requireDashAuth, (req, res) => {
 
 // ── Runner: Edit task ───────────────────────────────────────────────────
 
-app.post("/setup/api/runner/edit", requireSetupAuth, (req, res) => {
+app.post("/setup/api/runner/edit", requireDashAuth, (req, res) => {
   const { id, title, description, priority, project } = req.body || {};
   if (!id) {
     return res.status(400).json({ ok: false, error: "Missing required field: id" });
@@ -3253,7 +3263,7 @@ app.post("/setup/api/runner/edit", requireSetupAuth, (req, res) => {
 
 // ── Runner: Execute a task now ──────────────────────────────────────────
 
-app.post("/setup/api/runner/run", requireSetupAuth, async (req, res) => {
+app.post("/setup/api/runner/run", requireDashAuth, async (req, res) => {
   const { id } = req.body || {};
   if (!id) {
     return res.status(400).json({ ok: false, error: "Missing required field: id" });
@@ -3325,86 +3335,203 @@ app.post("/setup/api/runner/run", requireSetupAuth, async (req, res) => {
 
 // ── AI-Suggested Tasks ──────────────────────────────────────────────────
 
-app.post("/setup/api/runner/suggest", requireSetupAuth, async (req, res) => {
-  const { project } = req.body || {};
+// Gather project context for suggestions
+async function gatherProjectContext(targetProject) {
+  let projects = [];
   try {
-    // Gather context: project status, recent history, workspace files
-    let projects = [];
+    const entries = fs.readdirSync(WORKSPACE_DIR, { withFileTypes: true });
+    projects = entries.filter(e => e.isDirectory() && !e.name.startsWith(".")).map(e => e.name);
+  } catch { projects = []; }
+
+  const targetProjects = targetProject
+    ? projects.filter(p => p === targetProject || p === targetProject.split("/").pop())
+    : projects;
+
+  const projectData = [];
+  for (const proj of targetProjects.slice(0, 6)) {
+    const projDir = path.join(WORKSPACE_DIR, proj);
+    try { if (!fs.statSync(projDir).isDirectory()) continue; } catch { continue; }
+    const info = { name: proj, commits: [], dirtyFiles: [], issues: [], claudeMd: "" };
+
     try {
-      const entries = fs.readdirSync(WORKSPACE_DIR, { withFileTypes: true });
-      projects = entries.filter(e => e.isDirectory() && !e.name.startsWith(".")).map(e => e.name);
-    } catch { projects = []; }
+      info.claudeMd = fs.readFileSync(path.join(projDir, "CLAUDE.md"), "utf8").slice(0, 500);
+    } catch { /* skip */ }
 
-    // Filter to requested project or all
-    const targetProjects = project ? projects.filter(p => p === project || p === project.split("/").pop()) : projects;
+    const gitLog = await runCmd("git", ["-C", projDir, "log", "--oneline", "-10"]);
+    if (gitLog.code === 0) info.commits = gitLog.output.trim().split("\n").filter(Boolean);
 
-    // Gather context for each project
-    const contextParts = [];
-    for (const proj of targetProjects.slice(0, 6)) {
-      const projDir = path.join(WORKSPACE_DIR, proj);
-      // Verify it's actually a directory before using as cwd
-      try { if (!fs.statSync(projDir).isDirectory()) continue; } catch { continue; }
-      const parts = [`## Project: ${proj}`];
-      // Read CLAUDE.md if exists
-      try {
-        const claude = fs.readFileSync(path.join(projDir, "CLAUDE.md"), "utf8");
-        parts.push("CLAUDE.md (first 500 chars): " + claude.slice(0, 500));
-      } catch { /* skip */ }
-      // Git log
-      const gitLog = await runCmd("git", ["-C", projDir, "log", "--oneline", "-10"]);
-      if (gitLog.code === 0) parts.push("Recent commits:\n" + gitLog.output.slice(0, 500));
-      // Git status
-      const gitSt = await runCmd("git", ["-C", projDir, "status", "--short"]);
-      if (gitSt.code === 0 && gitSt.output.trim()) parts.push("Dirty files:\n" + gitSt.output.slice(0, 300));
-      // Issues (if gh is available)
-      try {
-        const issues = await runCmd("gh", ["issue", "list", "-R", `JW-Flo/${proj}`, "--limit", "5", "--json", "title,number,labels"], { cwd: projDir });
-        if (issues.code === 0 && issues.output.trim()) parts.push("Open issues: " + issues.output.slice(0, 500));
-      } catch { /* gh not available or dir issue */ }
-      contextParts.push(parts.join("\n"));
+    const gitSt = await runCmd("git", ["-C", projDir, "status", "--short"]);
+    if (gitSt.code === 0 && gitSt.output.trim()) info.dirtyFiles = gitSt.output.trim().split("\n").filter(Boolean);
+
+    try {
+      const issues = await runCmd("gh", ["issue", "list", "-R", `JW-Flo/${proj}`, "--limit", "5", "--json", "title,number,labels"], { cwd: projDir });
+      if (issues.code === 0 && issues.output.trim()) {
+        try { info.issues = JSON.parse(issues.output); } catch { /* skip */ }
+      }
+    } catch { /* gh not available */ }
+
+    projectData.push(info);
+  }
+  return projectData;
+}
+
+// Generate context-based suggestions without AI (fast fallback)
+function generateContextSuggestions(projectData, history) {
+  const suggestions = [];
+  const recentTitles = new Set(history.slice(-20).map(t => t.title.toLowerCase()));
+
+  for (const proj of projectData) {
+    // Suggest from open issues
+    for (const issue of (proj.issues || []).slice(0, 2)) {
+      const title = `Fix #${issue.number}: ${issue.title}`;
+      if (!recentTitles.has(title.toLowerCase())) {
+        const labels = (issue.labels || []).map(l => l.name || l).join(", ");
+        suggestions.push({
+          title,
+          description: `Address open issue in ${proj.name}. ${labels ? "Labels: " + labels : ""}`,
+          project: proj.name,
+          priority: labels.includes("bug") ? 2 : 5,
+          estimatedCost: "medium",
+          suggestedModel: "xai/grok-4",
+        });
+      }
     }
 
-    // Read workspace soul/identity for personality context
-    let soulContext = "";
-    try { soulContext = fs.readFileSync(path.join(WORKSPACE_DIR, "SOUL.md"), "utf8").slice(0, 300); } catch { /* skip */ }
-    try { soulContext += "\n" + fs.readFileSync(path.join(WORKSPACE_DIR, "MEMORY.md"), "utf8").slice(0, 300); } catch { /* skip */ }
+    // Suggest cleanup for dirty files
+    if (proj.dirtyFiles.length > 0) {
+      suggestions.push({
+        title: `Clean up uncommitted changes in ${proj.name}`,
+        description: `${proj.dirtyFiles.length} files have uncommitted changes: ${proj.dirtyFiles.slice(0, 5).join(", ")}`,
+        project: proj.name,
+        priority: 4,
+        estimatedCost: "low",
+        suggestedModel: "xai/grok-4-fast",
+      });
+    }
 
-    // Read recent task history
+    // Suggest tests/docs if project has recent activity
+    if (proj.commits.length >= 3) {
+      const recentCommitText = proj.commits.slice(0, 3).join("; ");
+      suggestions.push({
+        title: `Add test coverage for recent changes in ${proj.name}`,
+        description: `Recent commits: ${recentCommitText}. Ensure new code has tests.`,
+        project: proj.name,
+        priority: 5,
+        estimatedCost: "medium",
+        suggestedModel: "xai/grok-4",
+      });
+    }
+  }
+
+  return suggestions.slice(0, 5);
+}
+
+// Extract JSON array from agent output (tries multiple strategies)
+function extractJsonArray(output) {
+  // Strategy 1: Find ```json ... ``` code block
+  const codeBlockMatch = output.match(/```(?:json)?\s*(\[[\s\S]*?\])\s*```/);
+  if (codeBlockMatch) {
+    try { return JSON.parse(codeBlockMatch[1]); } catch { /* continue */ }
+  }
+
+  // Strategy 2: Find outermost [ ... ] pair
+  const firstBracket = output.indexOf("[");
+  const lastBracket = output.lastIndexOf("]");
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    try { return JSON.parse(output.slice(firstBracket, lastBracket + 1)); } catch { /* continue */ }
+  }
+
+  // Strategy 3: Try to find individual JSON objects and assemble array
+  const objMatches = [...output.matchAll(/\{[^{}]*"title"\s*:\s*"[^"]+?"[^{}]*\}/g)];
+  if (objMatches.length > 0) {
+    const objects = [];
+    for (const m of objMatches) {
+      try { objects.push(JSON.parse(m[0])); } catch { /* skip */ }
+    }
+    if (objects.length > 0) return objects;
+  }
+
+  return null;
+}
+
+app.post("/setup/api/runner/suggest", requireDashAuth, async (req, res) => {
+  const { project, mode } = req.body || {};
+  try {
     const queue = readTaskQueue();
-    const recentHistory = queue.history.slice(-10).map(t => `${t.title} (${t.status})`).join(", ");
+    const projectData = await gatherProjectContext(project);
+
+    // "quick" mode: skip AI, return context-based suggestions immediately
+    if (mode === "quick" || projectData.length === 0) {
+      const suggestions = generateContextSuggestions(projectData, queue.history || []);
+      return res.json({ ok: true, suggestions, source: "context" });
+    }
+
+    // Build context string for AI
+    const contextParts = projectData.map(p => {
+      const parts = [`## Project: ${p.name}`];
+      if (p.claudeMd) parts.push("CLAUDE.md: " + p.claudeMd);
+      if (p.commits.length) parts.push("Recent commits:\n" + p.commits.slice(0, 5).join("\n"));
+      if (p.dirtyFiles.length) parts.push("Dirty files:\n" + p.dirtyFiles.slice(0, 5).join("\n"));
+      if (p.issues.length) parts.push("Open issues: " + JSON.stringify(p.issues.slice(0, 3)));
+      return parts.join("\n");
+    });
+
+    const recentHistory = (queue.history || []).slice(-10).map(t => `${t.title} (${t.status})`).join(", ");
 
     const prompt = [
-      "You are a project manager AI. Based on the following project context, suggest 3-5 high-value tasks.",
-      "Return ONLY valid JSON: an array of objects with: title, description, project (repo name), priority (1-10), estimatedCost (low/medium/high), suggestedModel (e.g. xai/grok-4).",
-      "Focus on: bug fixes, test coverage, features from open issues, documentation, and refactoring.",
-      "Be specific and actionable. Prioritize work that generates value.",
+      "IMPORTANT: Respond with ONLY a JSON array. No markdown, no explanation, no code fences.",
+      "Generate 3-5 high-value development tasks as a JSON array.",
+      "Each object must have: title (string), description (string), project (repo name string), priority (number 1-10), estimatedCost (\"low\"|\"medium\"|\"high\"), suggestedModel (string like \"xai/grok-4\").",
       "",
-      soulContext ? `Agent personality:\n${soulContext}` : "",
-      recentHistory ? `Recently completed tasks: ${recentHistory}` : "",
+      "Example output format:",
+      '[{"title":"Add auth middleware tests","description":"The auth module lacks unit tests for edge cases","project":"Project-AtlasIT","priority":3,"estimatedCost":"medium","suggestedModel":"xai/grok-4"}]',
+      "",
+      recentHistory ? `Recently completed (avoid duplicates): ${recentHistory}` : "",
       "",
       ...contextParts,
     ].filter(Boolean).join("\n");
 
-    // Use the agent to generate suggestions
     const agentRes = await runCmd(OPENCLAW_NODE, clawArgs([
       "agent", "--session-id", "task-suggest",
       "--message", prompt,
       "--timeout", "60",
     ]));
 
-    // Try to parse JSON from the agent output
     const output = agentRes.output || "";
-    const jsonMatch = output.match(/\[[\s\S]*\]/);
-    if (jsonMatch) {
-      try {
-        const suggestions = JSON.parse(jsonMatch[0]);
-        return res.json({ ok: true, suggestions });
-      } catch { /* fall through */ }
+    const parsed = extractJsonArray(output);
+    if (parsed && Array.isArray(parsed) && parsed.length > 0) {
+      // Validate and sanitize each suggestion
+      const suggestions = parsed.filter(s => s && typeof s.title === "string").map(s => ({
+        title: String(s.title).slice(0, 200),
+        description: String(s.description || "").slice(0, 500),
+        project: String(s.project || "").slice(0, 100),
+        priority: Number.isInteger(s.priority) && s.priority >= 1 && s.priority <= 10 ? s.priority : 5,
+        estimatedCost: ["low", "medium", "high"].includes(s.estimatedCost) ? s.estimatedCost : "medium",
+        suggestedModel: String(s.suggestedModel || "xai/grok-4").slice(0, 50),
+      }));
+      if (suggestions.length > 0) {
+        return res.json({ ok: true, suggestions, source: "ai" });
+      }
     }
 
-    // Return raw if JSON parsing fails
-    return res.json({ ok: true, suggestions: [], raw: output.slice(0, 3000) });
+    // AI failed to return parseable JSON — fall back to context-based suggestions
+    const fallback = generateContextSuggestions(projectData, queue.history || []);
+    return res.json({
+      ok: true,
+      suggestions: fallback,
+      source: "context-fallback",
+      raw: fallback.length === 0 ? output.slice(0, 2000) : undefined,
+    });
   } catch (err) {
+    // Even on error, try to return something useful
+    try {
+      const projectData = await gatherProjectContext(project);
+      const queue = readTaskQueue();
+      const fallback = generateContextSuggestions(projectData, queue.history || []);
+      if (fallback.length > 0) {
+        return res.json({ ok: true, suggestions: fallback, source: "context-fallback", warning: err.message });
+      }
+    } catch { /* double failure */ }
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
@@ -3527,7 +3654,7 @@ app.get("/setup/api/chat/sessions", requireSetupAuth, async (_req, res) => {
 
 // ── Connection / Dashboard Status ───────────────────────────────────────
 
-app.get("/setup/api/connection", requireSetupAuth, async (_req, res) => {
+app.get("/setup/api/connection", requireDashAuth, async (_req, res) => {
   const uptime = process.uptime();
   const mem = process.memoryUsage();
   let gatewayPing = false;

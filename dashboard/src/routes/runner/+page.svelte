@@ -40,6 +40,7 @@
   let suggestions = $state([]);
   let suggestFilter = $state('');
   let suggestRaw = $state('');
+  let suggestSource = $state('');
 
   // Roadmap
   let roadmapLoading = $state(false);
@@ -170,16 +171,19 @@
     }
   }
 
-  async function getSuggestions() {
+  async function getSuggestions(mode = 'quick') {
     suggestLoading = true;
     suggestions = [];
     suggestRaw = '';
+    suggestSource = '';
     try {
       const data = await api.post('/setup/api/runner/suggest', {
         project: suggestFilter || undefined,
+        mode,
       });
       suggestions = data.suggestions || [];
       suggestRaw = data.raw || '';
+      suggestSource = data.source || '';
     } catch (err) {
       notifyError('Failed to get suggestions: ' + (err.body || err.message));
     } finally {
@@ -330,8 +334,11 @@
       <Button variant="primary" onclick={() => addModalOpen = true}>Add Task</Button>
       <Button variant="secondary" onclick={loadQueue} loading={loading}>Refresh</Button>
       <Button variant="ghost" onclick={runRoadmap} loading={roadmapLoading}>Run Roadmap Planner</Button>
-      <div class="ml-auto">
-        <Button variant="accent" onclick={getSuggestions} loading={suggestLoading}>
+      <div class="ml-auto flex items-center gap-2">
+        <Button variant="secondary" onclick={() => getSuggestions('quick')} loading={suggestLoading}>
+          Quick Suggest
+        </Button>
+        <Button variant="accent" onclick={() => getSuggestions('ai')} loading={suggestLoading}>
           AI Suggest Tasks
         </Button>
       </div>
@@ -341,8 +348,15 @@
     {#if suggestions.length > 0 || suggestRaw}
       <div class="mb-8 p-4 bg-accent/5 border border-accent/20 rounded-xl" style="animation: fadeIn 0.3s ease;">
         <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-semibold text-accent-2">AI Suggested Tasks</h3>
-          <button class="text-xs text-text-3 hover:text-text-2 cursor-pointer" onclick={() => { suggestions = []; suggestRaw = ''; }}>Dismiss</button>
+          <div class="flex items-center gap-2">
+            <h3 class="text-sm font-semibold text-accent-2">Suggested Tasks</h3>
+            {#if suggestSource}
+              <Badge variant={suggestSource === 'ai' ? 'accent' : 'default'}>
+                {suggestSource === 'ai' ? 'AI' : suggestSource === 'context-fallback' ? 'Context' : 'Quick'}
+              </Badge>
+            {/if}
+          </div>
+          <button class="text-xs text-text-3 hover:text-text-2 cursor-pointer" onclick={() => { suggestions = []; suggestRaw = ''; suggestSource = ''; }}>Dismiss</button>
         </div>
         {#if suggestions.length > 0}
           <div class="space-y-3">
