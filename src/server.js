@@ -84,20 +84,36 @@ const MODEL_POOL_PATH = path.join(STATE_DIR, "model-pool.json");
 function defaultModelPool() {
   return {
     models: [
+      // ── Free tier (tried first via free-first strategy) ────────────
       {
-        id: "openai/gpt-4o-mini",
-        provider: "openai",
-        tier: "standard",
-        costPer1kTokens: 0.000375,
-        dailyLimit: 50,
+        id: "google/gemini-2.5-flash:free",
+        provider: "google",
+        tier: "free",
+        costPer1kTokens: 0,
+        dailyLimit: 80,
         usedToday: 0,
         lastResetDate: "",
         enabled: true,
         priority: 1,
         minTaskPriority: 1,
         maxTaskPriority: 10,
-        capabilities: ["code", "analysis", "planning"],
+        capabilities: ["code", "analysis", "planning", "triage"],
       },
+      {
+        id: "openrouter/qwen/qwen3-coder:free",
+        provider: "openrouter",
+        tier: "free",
+        costPer1kTokens: 0,
+        dailyLimit: 60,
+        usedToday: 0,
+        lastResetDate: "",
+        enabled: true,
+        priority: 2,
+        minTaskPriority: 1,
+        maxTaskPriority: 10,
+        capabilities: ["code", "triage"],
+      },
+      // ── Economy tier (cheapest paid, for when free can't handle it) ─
       {
         id: "openai/gpt-4.1-nano",
         provider: "openai",
@@ -107,10 +123,25 @@ function defaultModelPool() {
         usedToday: 0,
         lastResetDate: "",
         enabled: true,
-        priority: 2,
-        minTaskPriority: 4,
+        priority: 3,
+        minTaskPriority: 1,
         maxTaskPriority: 10,
         capabilities: ["code", "analysis"],
+      },
+      // ── Standard tier ──────────────────────────────────────────────
+      {
+        id: "openai/gpt-4o-mini",
+        provider: "openai",
+        tier: "standard",
+        costPer1kTokens: 0.000375,
+        dailyLimit: 50,
+        usedToday: 0,
+        lastResetDate: "",
+        enabled: true,
+        priority: 4,
+        minTaskPriority: 1,
+        maxTaskPriority: 10,
+        capabilities: ["code", "analysis", "planning"],
       },
       {
         id: "openai/gpt-4.1-mini",
@@ -121,11 +152,12 @@ function defaultModelPool() {
         usedToday: 0,
         lastResetDate: "",
         enabled: true,
-        priority: 3,
+        priority: 5,
         minTaskPriority: 1,
         maxTaskPriority: 10,
         capabilities: ["code", "analysis", "planning"],
       },
+      // ── Premium tier (only for complex reasoning / critical tasks) ─
       {
         id: "openai/o4-mini",
         provider: "openai",
@@ -135,7 +167,7 @@ function defaultModelPool() {
         usedToday: 0,
         lastResetDate: "",
         enabled: true,
-        priority: 4,
+        priority: 6,
         minTaskPriority: 1,
         maxTaskPriority: 3,
         capabilities: ["code", "analysis", "planning", "reasoning"],
@@ -149,11 +181,12 @@ function defaultModelPool() {
         usedToday: 0,
         lastResetDate: "",
         enabled: true,
-        priority: 5,
+        priority: 7,
         minTaskPriority: 1,
         maxTaskPriority: 3,
         capabilities: ["code", "analysis", "planning"],
       },
+      // ── Fallback ───────────────────────────────────────────────────
       {
         id: "openrouter/auto",
         provider: "openrouter",
@@ -163,30 +196,16 @@ function defaultModelPool() {
         usedToday: 0,
         lastResetDate: "",
         enabled: true,
-        priority: 6,
+        priority: 8,
         minTaskPriority: 1,
         maxTaskPriority: 10,
         capabilities: ["code", "analysis", "planning"],
-      },
-      {
-        id: "google/gemini-2.5-flash:free",
-        provider: "google",
-        tier: "free",
-        costPer1kTokens: 0,
-        dailyLimit: 50,
-        usedToday: 0,
-        lastResetDate: "",
-        enabled: true,
-        priority: 7,
-        minTaskPriority: 5,
-        maxTaskPriority: 10,
-        capabilities: ["code", "analysis"],
       },
     ],
     scheduler: {
       enabled: false,
       intervalSeconds: 600,
-      strategy: "cost-optimized",
+      strategy: "free-first",
       maxConcurrent: 1,
       pauseStart: "00:00",
       pauseEnd: "06:00",
@@ -223,7 +242,7 @@ function resetDailyCountsIfNeeded(pool) {
 
 function selectModelForTask(pool, taskPriority) {
   resetDailyCountsIfNeeded(pool);
-  const strategy = pool.scheduler.strategy || "cost-optimized";
+  const strategy = pool.scheduler.strategy || "free-first";
   const eligible = pool.models.filter(
     (m) =>
       m.enabled &&
@@ -233,10 +252,26 @@ function selectModelForTask(pool, taskPriority) {
   );
   if (eligible.length === 0) return null;
 
-  if (strategy === "cost-optimized") {
-    // For high-priority tasks (1-3), use the best available (lowest priority number)
-    // For low-priority tasks (7-10), use cheapest available
-    // For mid-priority (4-6), balance between quality and cost
+  if (strategy === "free-first") {
+    // Always prefer free models. Only use paid if no free models are available
+    // or if task is explicitly high-priority (1-2) indicating triage escalation.
+    const free = eligible.filter((m) => m.tier === "free");
+    if (free.length > 0 && taskPriority >= 3) {
+      free.sort((a, b) => a.priority - b.priority);
+      return free[0];
+    }
+    // For escalated tasks (priority 1-2) or if no free models available,
+    // pick cheapest paid model first, then fall through to free
+    eligible.sort((a, b) => {
+      // Escalated tasks skip free tier
+      if (taskPriority <= 2) {
+        const aFree = a.tier === "free" ? 1 : 0;
+        const bFree = b.tier === "free" ? 1 : 0;
+        if (aFree !== bFree) return aFree - bFree; // paid first
+      }
+      return a.costPer1kTokens - b.costPer1kTokens || a.priority - b.priority;
+    });
+  } else if (strategy === "cost-optimized") {
     if (taskPriority <= 3) {
       eligible.sort((a, b) => a.priority - b.priority);
     } else if (taskPriority >= 7) {
@@ -253,10 +288,118 @@ function selectModelForTask(pool, taskPriority) {
   } else if (strategy === "quality-first") {
     eligible.sort((a, b) => a.priority - b.priority);
   } else {
-    // cheapest-first
     eligible.sort((a, b) => a.costPer1kTokens - b.costPer1kTokens);
   }
   return eligible[0];
+}
+
+// ── Prompt Triage (free model decides if paid model is needed) ───────────
+
+const TRIAGE_SYSTEM_PROMPT = `You are a prompt complexity and model-type classifier for an AI coding assistant. Evaluate the user prompt and decide:
+1. Which cost tier should handle it
+2. Which model TYPE is best suited
+
+Respond with ONLY a JSON object, no markdown.
+
+Tiers (cost escalation):
+- "free": Simple questions, greetings, basic lookups, short summaries, trivial code, status checks, small edits
+- "economy": Moderate tasks, single-file edits, straightforward explanations, simple debugging
+- "standard": Multi-step tasks, multi-file code changes, detailed analysis, API integrations
+- "premium": Complex multi-step reasoning, architecture design, large refactoring, math proofs, advanced debugging
+
+Model types (capability matching):
+- "general": Conversational, Q&A, summaries, explanations (→ gpt-4o-mini, gemini-flash)
+- "code": Code generation, editing, debugging, reviews (→ gpt-4.1-nano, gpt-4.1-mini, codex)
+- "reasoning": Logic, math, planning, architecture, multi-step problem solving (→ o4-mini)
+- "agentic": Multi-turn tool use, file operations, git workflows, long chains (→ gpt-4.1, benefits from WebSocket mode)
+
+JSON format: {"tier":"free","modelType":"general","reason":"brief reason"}`;
+
+async function triagePrompt(userMessage) {
+  const orToken = process.env.OPENROUTER_API_TOKEN?.trim();
+  if (!orToken) return { tier: "free", modelType: "general", reason: "no triage key available" };
+
+  try {
+    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${orToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash:free",
+        messages: [
+          { role: "system", content: TRIAGE_SYSTEM_PROMPT },
+          { role: "user", content: userMessage.slice(0, 2000) },
+        ],
+        max_tokens: 120,
+        temperature: 0,
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+
+    if (!resp.ok) {
+      console.warn(`[triage] API error ${resp.status}, defaulting to free`);
+      return { tier: "free", modelType: "general", reason: "triage api error" };
+    }
+
+    const data = await resp.json();
+    const content = data.choices?.[0]?.message?.content?.trim() || "";
+    const parsed = JSON.parse(content.replace(/^```json\s*|```$/g, "").trim());
+    const validTiers = ["free", "economy", "standard", "premium"];
+    const validTypes = ["general", "code", "reasoning", "agentic"];
+    if (validTiers.includes(parsed.tier)) {
+      parsed.modelType = validTypes.includes(parsed.modelType) ? parsed.modelType : "general";
+      console.log(`[triage] "${userMessage.slice(0, 80)}..." → ${parsed.tier}/${parsed.modelType}: ${parsed.reason}`);
+      return parsed;
+    }
+    return { tier: "free", modelType: "general", reason: "invalid triage response" };
+  } catch (err) {
+    console.warn(`[triage] error: ${err.message}, defaulting to free`);
+    return { tier: "free", modelType: "general", reason: `triage error: ${err.message}` };
+  }
+}
+
+function selectModelByTier(pool, tier, modelType) {
+  resetDailyCountsIfNeeded(pool);
+
+  // Model-type preference mapping: which model IDs are best for each type
+  const typePreferences = {
+    code: ["openai/gpt-4.1-nano", "openai/gpt-4.1-mini", "openai/gpt-4.1", "openrouter/qwen/qwen3-coder:free"],
+    reasoning: ["openai/o4-mini", "openai/gpt-4.1", "openai/gpt-4o-mini"],
+    agentic: ["openai/gpt-4.1", "openai/gpt-4.1-mini", "openai/o4-mini"],
+    general: [], // no preference, use tier-based selection
+  };
+
+  const tierOrder = {
+    free: ["free"],
+    economy: ["economy", "free"],
+    standard: ["standard", "economy"],
+    premium: ["premium", "standard"],
+  };
+  const tiers = tierOrder[tier] || ["free"];
+  const preferred = typePreferences[modelType || "general"] || [];
+
+  // First pass: find a model matching both tier AND model-type preference
+  for (const t of tiers) {
+    const inTier = pool.models.filter(
+      (m) => m.enabled && m.tier === t && m.usedToday < m.dailyLimit
+    );
+    if (preferred.length > 0) {
+      const match = inTier.find((m) => preferred.includes(m.id));
+      if (match) return match;
+    }
+    // No type-specific match in this tier, pick cheapest in tier
+    if (inTier.length > 0) {
+      inTier.sort((a, b) => a.costPer1kTokens - b.costPer1kTokens || a.priority - b.priority);
+      return inTier[0];
+    }
+  }
+
+  // Final fallback: any available model, cheapest first
+  const any = pool.models.filter((m) => m.enabled && m.usedToday < m.dailyLimit);
+  any.sort((a, b) => a.costPer1kTokens - b.costPer1kTokens);
+  return any[0] || null;
 }
 
 // ── Auto-scheduler background loop ─────────────────────────────────────
@@ -3420,7 +3563,7 @@ function generateContextSuggestions(projectData, history) {
           project: proj.name,
           priority: labels.includes("bug") ? 2 : 5,
           estimatedCost: "medium",
-          suggestedModel: "xai/grok-4",
+          suggestedModel: "openai/gpt-4o-mini",
         });
       }
     }
@@ -3433,7 +3576,7 @@ function generateContextSuggestions(projectData, history) {
         project: proj.name,
         priority: 4,
         estimatedCost: "low",
-        suggestedModel: "xai/grok-4-fast",
+        suggestedModel: "openai/gpt-4.1-nano",
       });
     }
 
@@ -3446,7 +3589,7 @@ function generateContextSuggestions(projectData, history) {
         project: proj.name,
         priority: 5,
         estimatedCost: "medium",
-        suggestedModel: "xai/grok-4",
+        suggestedModel: "openai/gpt-4o-mini",
       });
     }
   }
@@ -3509,10 +3652,10 @@ app.post("/setup/api/runner/suggest", requireDashAuth, async (req, res) => {
     const prompt = [
       "IMPORTANT: Respond with ONLY a JSON array. No markdown, no explanation, no code fences.",
       "Generate 3-5 high-value development tasks as a JSON array.",
-      "Each object must have: title (string), description (string), project (repo name string), priority (number 1-10), estimatedCost (\"low\"|\"medium\"|\"high\"), suggestedModel (string like \"xai/grok-4\").",
+      "Each object must have: title (string), description (string), project (repo name string), priority (number 1-10), estimatedCost (\"low\"|\"medium\"|\"high\"), suggestedModel (string like \"openai/gpt-4o-mini\").",
       "",
       "Example output format:",
-      '[{"title":"Add auth middleware tests","description":"The auth module lacks unit tests for edge cases","project":"Project-AtlasIT","priority":3,"estimatedCost":"medium","suggestedModel":"xai/grok-4"}]',
+      '[{"title":"Add auth middleware tests","description":"The auth module lacks unit tests for edge cases","project":"Project-AtlasIT","priority":3,"estimatedCost":"medium","suggestedModel":"openai/gpt-4o-mini"}]',
       "",
       recentHistory ? `Recently completed (avoid duplicates): ${recentHistory}` : "",
       "",
@@ -3535,7 +3678,7 @@ app.post("/setup/api/runner/suggest", requireDashAuth, async (req, res) => {
         project: String(s.project || "").slice(0, 100),
         priority: Number.isInteger(s.priority) && s.priority >= 1 && s.priority <= 10 ? s.priority : 5,
         estimatedCost: ["low", "medium", "high"].includes(s.estimatedCost) ? s.estimatedCost : "medium",
-        suggestedModel: String(s.suggestedModel || "xai/grok-4").slice(0, 50),
+        suggestedModel: String(s.suggestedModel || "openai/gpt-4o-mini").slice(0, 50),
       }));
       if (suggestions.length > 0) {
         return res.json({ ok: true, suggestions, source: "ai" });
@@ -3566,7 +3709,7 @@ app.post("/setup/api/runner/suggest", requireDashAuth, async (req, res) => {
 
 // ── Chat API (SSE streaming) ────────────────────────────────────────────
 
-app.post("/setup/api/chat/send", requireDashAuth, (req, res) => {
+app.post("/setup/api/chat/send", requireDashAuth, async (req, res) => {
   const { message, sessionId, model } = req.body || {};
   if (!message || typeof message !== "string" || !message.trim()) {
     return res.status(400).json({ ok: false, error: "Missing message" });
@@ -3583,14 +3726,30 @@ app.post("/setup/api/chat/send", requireDashAuth, (req, res) => {
     return res.status(429).json({ ok: false, error: concCheck.reason });
   }
 
-  // Check model quota (determine tier from current model pool)
+  // ── Free-first triage: let a free model decide if paid model is needed ──
   const pool = readModelPool();
-  const currentModel = pool.models.find(m => m.enabled) || {};
-  const modelTier = currentModel.tier || "standard";
+  const triage = await triagePrompt(message);
+  const triageModel = selectModelByTier(pool, triage.tier, triage.modelType);
+  const modelTier = triageModel?.tier || "free";
+
+  // Check model quota using the triaged tier
   const quotaCheck = checkUserQuota(user.id, user.role, modelTier);
   if (!quotaCheck.allowed) {
     appendActivity("quota_exceeded", { userId: user.id, modelTier, reason: quotaCheck.reason }, user);
     return res.status(429).json({ ok: false, error: quotaCheck.reason });
+  }
+
+  // Switch to triaged model if different from current
+  let previousModel = null;
+  if (triageModel) {
+    const currentModelRes = await runCmd(OPENCLAW_NODE, clawArgs(["models"]));
+    const currentMatch = currentModelRes.output.match(/Default\s*:\s*(.+)/);
+    previousModel = currentMatch ? currentMatch[1].trim() : null;
+    if (previousModel !== triageModel.id) {
+      await runCmd(OPENCLAW_NODE, clawArgs(["models", "set", triageModel.id]));
+    }
+    triageModel.usedToday++;
+    writeModelPool(pool);
   }
 
   // Track session and usage
@@ -3628,7 +3787,7 @@ app.post("/setup/api/chat/send", requireDashAuth, (req, res) => {
     try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* closed */ }
   }
 
-  sendSSE("status", { status: "started", sessionId: sid });
+  sendSSE("status", { status: "started", sessionId: sid, triageTier: triage.tier, model: triageModel?.id });
 
   proc.stdout?.on("data", (chunk) => {
     const text = chunk.toString("utf8");
@@ -3644,14 +3803,21 @@ app.post("/setup/api/chat/send", requireDashAuth, (req, res) => {
 
   proc.on("close", (code) => {
     untrackSession(user.id, sid);
-    sendSSE("done", { code, output: fullOutput.slice(-5000) });
-    appendActivity("chat_message", { sessionId: sid, length: message.length }, user);
+    sendSSE("done", { code, output: fullOutput.slice(-5000), triageTier: triage.tier, model: triageModel?.id });
+    appendActivity("chat_message", { sessionId: sid, length: message.length, triageTier: triage.tier, model: triageModel?.id }, user);
+    // Restore previous model after completion
+    if (previousModel && triageModel && previousModel !== triageModel.id) {
+      runCmd(OPENCLAW_NODE, clawArgs(["models", "set", previousModel])).catch(() => {});
+    }
     try { res.end(); } catch { /* already closed */ }
   });
 
   proc.on("error", (err) => {
     untrackSession(user.id, sid);
     sendSSE("error", { message: err.message });
+    if (previousModel && triageModel && previousModel !== triageModel.id) {
+      runCmd(OPENCLAW_NODE, clawArgs(["models", "set", previousModel])).catch(() => {});
+    }
     try { res.end(); } catch { /* already closed */ }
   });
 
@@ -3971,13 +4137,30 @@ app.get("/api/v1/health", requireApiToken, (_req, res) => {
 });
 
 // External API: send message to agent
-app.post("/api/v1/agent/message", requireApiToken, (req, res) => {
+app.post("/api/v1/agent/message", requireApiToken, async (req, res) => {
   const { message, sessionId, timeout } = req.body || {};
   if (!message || typeof message !== "string") {
     return res.status(400).json({ ok: false, error: "Missing message" });
   }
   const sid = (typeof sessionId === "string" && sessionId.trim()) ? sessionId.trim().slice(0, 100) : `api-${Date.now()}`;
   const tout = Math.min(Math.max(Number(timeout) || 120, 10), 600);
+
+  // ── Free-first triage ──
+  const pool = readModelPool();
+  const triage = await triagePrompt(message);
+  const triageModel = selectModelByTier(pool, triage.tier, triage.modelType);
+
+  let previousModel = null;
+  if (triageModel) {
+    const cur = await runCmd(OPENCLAW_NODE, clawArgs(["models"]));
+    const match = cur.output.match(/Default\s*:\s*(.+)/);
+    previousModel = match ? match[1].trim() : null;
+    if (previousModel !== triageModel.id) {
+      await runCmd(OPENCLAW_NODE, clawArgs(["models", "set", triageModel.id]));
+    }
+    triageModel.usedToday++;
+    writeModelPool(pool);
+  }
 
   // SSE streaming response
   res.writeHead(200, {
@@ -4000,15 +4183,24 @@ app.post("/api/v1/agent/message", requireApiToken, (req, res) => {
     try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* closed */ }
   }
 
-  sendSSE("status", { sessionId: sid });
+  sendSSE("status", { sessionId: sid, triageTier: triage.tier, model: triageModel?.id });
   proc.stdout?.on("data", (d) => { const t = d.toString("utf8"); fullOutput += t; sendSSE("chunk", { text: t }); });
   proc.stderr?.on("data", (d) => { const t = d.toString("utf8"); fullOutput += t; sendSSE("chunk", { text: t }); });
   proc.on("close", (code) => {
-    sendSSE("done", { code, output: fullOutput.slice(-5000) });
-    appendActivity("api_agent_message", { sessionId: sid, tokenName: req.apiToken.name });
+    sendSSE("done", { code, output: fullOutput.slice(-5000), triageTier: triage.tier, model: triageModel?.id });
+    appendActivity("api_agent_message", { sessionId: sid, tokenName: req.apiToken.name, triageTier: triage.tier, model: triageModel?.id });
+    if (previousModel && triageModel && previousModel !== triageModel.id) {
+      runCmd(OPENCLAW_NODE, clawArgs(["models", "set", previousModel])).catch(() => {});
+    }
     try { res.end(); } catch { /* closed */ }
   });
-  proc.on("error", (err) => { sendSSE("error", { message: err.message }); try { res.end(); } catch { /* closed */ } });
+  proc.on("error", (err) => {
+    if (previousModel && triageModel && previousModel !== triageModel.id) {
+      runCmd(OPENCLAW_NODE, clawArgs(["models", "set", previousModel])).catch(() => {});
+    }
+    sendSSE("error", { message: err.message });
+    try { res.end(); } catch { /* closed */ }
+  });
   req.on("close", () => { try { proc.kill("SIGTERM"); } catch { /* exited */ } });
 });
 
