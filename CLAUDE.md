@@ -173,8 +173,8 @@ The user operates in **CST (Central Standard Time, America/Chicago)**. All cron 
 - **Dashboard**: `/dashboard` (Basic auth)
 - **Control UI**: `/openclaw` (no auth needed, token auto-injected)
 - **Setup Wizard**: `/setup` (Basic auth)
-- **Current Provider**: xAI/Grok (`xai/grok-4`)
-- **Fallbacks**: `xai/grok-4-fast`, `xai/grok-3`
+- **Current Provider**: OpenAI (`openai/gpt-4o-mini`)
+- **Fallbacks**: `openai/gpt-4.1-nano`, `openai/gpt-4.1-mini`, `openai/o4-mini` (reasoning), `openrouter/auto`
 - **Agent timeout**: 180 seconds
 - **Cron jobs**: `daily-health-check` (9 AM CT), `hourly-heartbeat` (every 1h)
 - **Agent personality**: Addresses user as "Joe" or "Overlord" (see workspace SOUL.md)
@@ -197,7 +197,7 @@ The user operates in **CST (Central Standard Time, America/Chicago)**. All cron 
 
 ### DevOps Credentials (all set on Railway)
 
-`GH_PAT`, `OPENROUTER_API_TOKEN`, `ANTHROPIC_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`, `RAILWAY_ACCOUNT_TOKEN`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `GROK_API_KEY`
+`GH_PAT`, `OPENAI_API_KEY`, `OPENROUTER_API_TOKEN`, `ANTHROPIC_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`, `RAILWAY_ACCOUNT_TOKEN`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `GROK_API_KEY`
 
 ### Installed CLI Tools
 
@@ -438,7 +438,7 @@ echo "=== Health ===" && curl -s $BASE/healthz
 echo -e "\n=== Gateway ===" && curl -s $BASE/setup/healthz | python3 -m json.tool
 echo -e "\n=== Model ===" && curl -s -H "Authorization: Basic $AUTH" $BASE/setup/api/models/current
 echo -e "\n=== Projects ===" && curl -s -H "Authorization: Basic $AUTH" $BASE/setup/api/projects/status | python3 -m json.tool
-echo -e "\n=== Credentials ===" && curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" $BASE/setup/api/shell -d '{"command":"for v in GH_PAT OPENROUTER_API_TOKEN ANTHROPIC_API_KEY CLOUDFLARE_ACCOUNT_ID RAILWAY_ACCOUNT_TOKEN TELEGRAM_API_ID TELEGRAM_API_HASH GROK_API_KEY; do val=$(printenv $v); if [ -n \"$val\" ]; then echo \"$v: SET\"; else echo \"$v: MISSING\"; fi; done"}'
+echo -e "\n=== Credentials ===" && curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" $BASE/setup/api/shell -d '{"command":"for v in GH_PAT OPENAI_API_KEY OPENROUTER_API_TOKEN ANTHROPIC_API_KEY CLOUDFLARE_ACCOUNT_ID RAILWAY_ACCOUNT_TOKEN TELEGRAM_API_ID TELEGRAM_API_HASH GROK_API_KEY; do val=$(printenv $v); if [ -n \"$val\" ]; then echo \"$v: SET\"; else echo \"$v: MISSING\"; fi; done"}'
 ```
 
 ## Railway Deployment Notes
