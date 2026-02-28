@@ -722,6 +722,106 @@ function validateApiToken(token) {
   return tokens.find(t => t.token === token && !t.revoked);
 }
 
+// ── BYOK (Bring Your Own Key) Management ────────────────────────────────
+const USER_API_KEYS_PATH = path.join(STATE_DIR, "user-api-keys.json");
+
+const BYOK_PROVIDERS = {
+  openai:      { envVar: "OPENAI_API_KEY",          label: "OpenAI",      prefix: "sk-" },
+  anthropic:   { envVar: "ANTHROPIC_API_KEY",       label: "Anthropic",   prefix: "sk-ant-" },
+  openrouter:  { envVar: "OPENROUTER_API_TOKEN",    label: "OpenRouter",  prefix: "sk-or-" },
+  gemini:      { envVar: "GEMINI_API_KEY",          label: "Google Gemini", prefix: "" },
+  xai:         { envVar: "XAI_API_KEY",             label: "xAI/Grok",   prefix: "" },
+};
+
+function readUserApiKeys() {
+  try {
+    return JSON.parse(fs.readFileSync(USER_API_KEYS_PATH, "utf8"));
+  } catch { return { users: {} }; }
+}
+
+function writeUserApiKeys(data) {
+  fs.writeFileSync(USER_API_KEYS_PATH, JSON.stringify(data, null, 2));
+}
+
+function getUserApiKeys(userId) {
+  const data = readUserApiKeys();
+  return data.users[userId] || { keys: {}, quotas: null };
+}
+
+function setUserApiKey(userId, provider, apiKey, label) {
+  const data = readUserApiKeys();
+  if (!data.users[userId]) data.users[userId] = { keys: {}, quotas: null };
+  data.users[userId].keys[provider] = {
+    apiKey,
+    label: label || BYOK_PROVIDERS[provider]?.label || provider,
+    addedAt: new Date().toISOString(),
+  };
+  writeUserApiKeys(data);
+}
+
+function removeUserApiKey(userId, provider) {
+  const data = readUserApiKeys();
+  if (data.users[userId]?.keys) {
+    delete data.users[userId].keys[provider];
+    writeUserApiKeys(data);
+  }
+}
+
+function setUserQuotaOverrides(userId, quotas) {
+  const data = readUserApiKeys();
+  if (!data.users[userId]) data.users[userId] = { keys: {}, quotas: null };
+  data.users[userId].quotas = quotas;
+  writeUserApiKeys(data);
+}
+
+function userHasByokKey(userId, provider) {
+  const userKeys = getUserApiKeys(userId);
+  return !!userKeys.keys[provider]?.apiKey;
+}
+
+// Build env overrides for a BYOK user's agent process
+function buildByokEnv(userId) {
+  const userKeys = getUserApiKeys(userId);
+  const envOverrides = {};
+  for (const [provider, keyData] of Object.entries(userKeys.keys || {})) {
+    const providerInfo = BYOK_PROVIDERS[provider];
+    if (providerInfo && keyData.apiKey) {
+      envOverrides[providerInfo.envVar] = keyData.apiKey;
+    }
+  }
+  return envOverrides;
+}
+
+// ── Per-Endpoint Rate Limiting ──────────────────────────────────────────
+function createRateLimiter(windowMs, maxRequests) {
+  const store = new Map();
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, val] of store) {
+      if (now - val.windowStart > windowMs) store.delete(key);
+    }
+  }, windowMs);
+  return {
+    check(key) {
+      const now = Date.now();
+      const entry = store.get(key);
+      if (!entry || now - entry.windowStart > windowMs) {
+        store.set(key, { windowStart: now, count: 1 });
+        return { limited: false, remaining: maxRequests - 1 };
+      }
+      entry.count++;
+      if (entry.count > maxRequests) {
+        return { limited: true, remaining: 0, retryAfter: Math.ceil((entry.windowStart + windowMs - now) / 1000) };
+      }
+      return { limited: false, remaining: maxRequests - entry.count };
+    },
+  };
+}
+
+const shellRateLimiter = createRateLimiter(60_000, 10); // 10 requests per minute
+const chatRateLimiter  = createRateLimiter(60_000, 30); // 30 requests per minute
+const apiRateLimiter   = createRateLimiter(60_000, 20); // 20 requests per minute
+
 // ── Dashboard User/RBAC System ──────────────────────────────────────────
 const USERS_PATH = path.join(STATE_DIR, "dashboard-users.json");
 
@@ -788,15 +888,36 @@ function incrementUserUsage(userId, modelTier) {
 }
 
 function checkUserQuota(userId, role, modelTier) {
-  const quotas = ROLE_MODEL_QUOTAS[role] || ROLE_MODEL_QUOTAS["limited-read"];
+  // Owner always gets unlimited access
+  if (role === "owner") return { allowed: true };
+
+  // Check if BYOK user has custom quota overrides
+  const userKeyData = getUserApiKeys(userId);
+  const hasByokKeys = Object.keys(userKeyData.keys || {}).length > 0;
+  const customQuotas = userKeyData.quotas;
+
+  // BYOK users with custom quotas use their own limits (they pay their own costs)
+  const quotas = (hasByokKeys && customQuotas)
+    ? customQuotas
+    : (ROLE_MODEL_QUOTAS[role] || ROLE_MODEL_QUOTAS["limited-read"]);
+
   const userUsage = getUserUsageToday(userId);
   if (modelTier === "free") {
-    if (userUsage.freeRequests >= quotas.freeRequestsPerDay) {
-      return { allowed: false, reason: `Free model daily limit reached (${quotas.freeRequestsPerDay})` };
+    const limit = quotas.freeRequestsPerDay ?? Infinity;
+    if (limit !== -1 && userUsage.freeRequests >= limit) {
+      return { allowed: false, reason: `Free model daily limit reached (${limit})` };
     }
   } else {
-    if (userUsage.paidRequests >= quotas.paidRequestsPerDay) {
-      return { allowed: false, reason: `Paid model daily limit reached (${quotas.paidRequestsPerDay}). Try a free model instead.` };
+    // Non-owner without BYOK keys cannot use paid models (instance keys are owner-only)
+    if (!hasByokKeys && role !== "owner") {
+      const roleLimit = (ROLE_MODEL_QUOTAS[role] || ROLE_MODEL_QUOTAS["limited-read"]).paidRequestsPerDay;
+      if (roleLimit === 0) {
+        return { allowed: false, reason: "Paid models require your own API key. Add one in Settings → API Keys." };
+      }
+    }
+    const limit = quotas.paidRequestsPerDay ?? 0;
+    if (limit !== -1 && limit !== Infinity && userUsage.paidRequests >= limit) {
+      return { allowed: false, reason: `Paid model daily limit reached (${limit}). ${hasByokKeys ? "Adjust your quota in Settings." : "Try a free model or add your own API key."}` };
     }
   }
   return { allowed: true };
@@ -2122,6 +2243,18 @@ app.post("/setup/api/openclaw-cmd", requireSetupAuth, async (req, res) => {
 
 // Run shell commands in workspace (auth-protected, blocklist for safety)
 app.post("/setup/api/shell", requireSetupAuth, async (req, res) => {
+  // Shell API is restricted to owner role only
+  if (req.dashUser?.role !== "owner") {
+    return res.status(403).json({ ok: false, error: "Shell API is restricted to owner role" });
+  }
+
+  // Rate limit: 10 requests per minute even for owner
+  const rlKey = req.dashUser?.id || req.ip || "unknown";
+  const rl = shellRateLimiter.check(rlKey);
+  if (rl.limited) {
+    return res.status(429).json({ ok: false, error: `Rate limited. Retry in ${rl.retryAfter}s.` });
+  }
+
   const { command, cwd } = req.body || {};
   if (!command || typeof command !== "string") {
     return res.status(400).json({ ok: false, error: "Missing command string" });
@@ -2860,6 +2993,85 @@ app.post("/setup/api/users/delete", requireSetupAuth, (req, res) => {
   data.sessions = (data.sessions || []).filter(s => s.userId !== id);
   writeUsers(data);
   return res.json({ ok: true });
+});
+
+// ── BYOK (Bring Your Own Key) Endpoints ─────────────────────────────────
+
+// Get current user's API keys (masked) and quota overrides
+app.get("/setup/api/byok/keys", requireDashAuth, (req, res) => {
+  const userKeys = getUserApiKeys(req.dashUser.id);
+  const masked = {};
+  for (const [provider, keyData] of Object.entries(userKeys.keys || {})) {
+    masked[provider] = {
+      label: keyData.label,
+      addedAt: keyData.addedAt,
+      masked: keyData.apiKey ? keyData.apiKey.slice(0, 8) + "..." + keyData.apiKey.slice(-4) : "***",
+    };
+  }
+  return res.json({
+    ok: true,
+    keys: masked,
+    quotas: userKeys.quotas,
+    providers: Object.entries(BYOK_PROVIDERS).map(([k, v]) => ({ id: k, label: v.label })),
+  });
+});
+
+// Add or update a BYOK API key
+app.post("/setup/api/byok/keys/set", requireDashAuth, (req, res) => {
+  const { provider, apiKey, label } = req.body || {};
+  if (!provider || !BYOK_PROVIDERS[provider]) {
+    return res.status(400).json({ ok: false, error: `Invalid provider. Valid: ${Object.keys(BYOK_PROVIDERS).join(", ")}` });
+  }
+  if (!apiKey || typeof apiKey !== "string" || apiKey.trim().length < 10) {
+    return res.status(400).json({ ok: false, error: "API key is required (min 10 chars)" });
+  }
+  setUserApiKey(req.dashUser.id, provider, apiKey.trim(), label);
+  appendActivity("byok_key_set", { provider, userId: req.dashUser.id }, req.dashUser);
+  return res.json({ ok: true, provider });
+});
+
+// Remove a BYOK API key
+app.post("/setup/api/byok/keys/remove", requireDashAuth, (req, res) => {
+  const { provider } = req.body || {};
+  if (!provider) return res.status(400).json({ ok: false, error: "provider required" });
+  removeUserApiKey(req.dashUser.id, provider);
+  appendActivity("byok_key_removed", { provider, userId: req.dashUser.id }, req.dashUser);
+  return res.json({ ok: true });
+});
+
+// Set custom quota overrides (BYOK users control their own limits)
+app.post("/setup/api/byok/quotas", requireDashAuth, (req, res) => {
+  const { paidRequestsPerDay, freeRequestsPerDay, maxConcurrentSessions } = req.body || {};
+  const userKeys = getUserApiKeys(req.dashUser.id);
+  if (Object.keys(userKeys.keys || {}).length === 0) {
+    return res.status(400).json({ ok: false, error: "Add at least one API key before setting custom quotas" });
+  }
+  const quotas = {
+    paidRequestsPerDay: Number.isFinite(paidRequestsPerDay) && paidRequestsPerDay >= 0 ? Math.floor(paidRequestsPerDay) : 50,
+    freeRequestsPerDay: freeRequestsPerDay === -1 ? -1 : (Number.isFinite(freeRequestsPerDay) && freeRequestsPerDay >= 0 ? Math.floor(freeRequestsPerDay) : -1),
+    maxConcurrentSessions: Number.isFinite(maxConcurrentSessions) && maxConcurrentSessions >= 1 ? Math.min(Math.floor(maxConcurrentSessions), 10) : 5,
+  };
+  setUserQuotaOverrides(req.dashUser.id, quotas);
+  appendActivity("byok_quotas_set", { quotas, userId: req.dashUser.id }, req.dashUser);
+  return res.json({ ok: true, quotas });
+});
+
+// Owner endpoint: view all users' BYOK keys (masked) and quotas
+app.get("/setup/api/byok/all", requireSetupAuth, (_req, res) => {
+  const data = readUserApiKeys();
+  const result = {};
+  for (const [userId, userData] of Object.entries(data.users || {})) {
+    const masked = {};
+    for (const [provider, keyData] of Object.entries(userData.keys || {})) {
+      masked[provider] = {
+        label: keyData.label,
+        addedAt: keyData.addedAt,
+        hasKey: !!keyData.apiKey,
+      };
+    }
+    result[userId] = { keys: masked, quotas: userData.quotas };
+  }
+  return res.json({ ok: true, users: result });
 });
 
 // ── Session Termination ─────────────────────────────────────────────────
@@ -3720,6 +3932,14 @@ app.post("/setup/api/chat/send", requireDashAuth, async (req, res) => {
     ? sessionId.trim().slice(0, 100)
     : `chat-${Date.now()}`;
 
+  // Rate limit (owner exempt)
+  if (user.role !== "owner") {
+    const rl = chatRateLimiter.check(user.id);
+    if (rl.limited) {
+      return res.status(429).json({ ok: false, error: `Rate limited. Retry in ${rl.retryAfter}s.` });
+    }
+  }
+
   // Check concurrent session limit
   const concCheck = checkConcurrentLimit(user.id, user.role);
   if (!concCheck.allowed) {
@@ -3773,9 +3993,13 @@ app.post("/setup/api/chat/send", requireDashAuth, async (req, res) => {
     "--timeout", String(timeout),
   ];
 
+  // Inject BYOK keys for non-owner users (owner uses instance keys)
+  const byokEnv = (user.role !== "owner") ? buildByokEnv(user.id) : {};
+
   const proc = childProcess.spawn(OPENCLAW_NODE, clawArgs(agentArgs), {
     env: {
       ...process.env,
+      ...byokEnv,
       OPENCLAW_STATE_DIR: STATE_DIR,
       OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
     },
@@ -4144,6 +4368,12 @@ app.post("/api/v1/agent/message", requireApiToken, async (req, res) => {
   }
   const sid = (typeof sessionId === "string" && sessionId.trim()) ? sessionId.trim().slice(0, 100) : `api-${Date.now()}`;
   const tout = Math.min(Math.max(Number(timeout) || 120, 10), 600);
+
+  // Rate limit by API token
+  const rl = apiRateLimiter.check(req.apiToken.id);
+  if (rl.limited) {
+    return res.status(429).json({ ok: false, error: `Rate limited. Retry in ${rl.retryAfter}s.` });
+  }
 
   // ── Free-first triage ──
   const pool = readModelPool();
