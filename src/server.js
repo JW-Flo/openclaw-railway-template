@@ -3574,9 +3574,16 @@ app.post("/setup/api/tools/set-env", requireSetupAuth, async (req, res) => {
 // ── Railway GraphQL API Integration ─────────────────────────────────────
 
 const RAILWAY_GQL = "https://backboard.railway.com/graphql/v2";
-const RAILWAY_PROJECT_ID = process.env.RAILWAY_PROJECT_ID || "c57527ed-e599-42da-8f49-7fb30c6c4166";
-const RAILWAY_SERVICE_ID = process.env.RAILWAY_SERVICE_ID || "dac5966e-646e-4644-b3e9-cd31352f696d";
-const RAILWAY_ENVIRONMENT_ID = process.env.RAILWAY_ENVIRONMENT_ID || "7932450e-bf32-4428-905e-de0c3dff381f";
+
+function getRailwayIds() {
+  const projectId = process.env.RAILWAY_PROJECT_ID;
+  const serviceId = process.env.RAILWAY_SERVICE_ID;
+  const environmentId = process.env.RAILWAY_ENVIRONMENT_ID;
+  if (!projectId || !serviceId || !environmentId) {
+    throw new Error("Missing Railway IDs: set RAILWAY_PROJECT_ID, RAILWAY_SERVICE_ID, and RAILWAY_ENVIRONMENT_ID");
+  }
+  return { projectId, serviceId, environmentId };
+}
 
 async function railwayGql(query, variables = {}) {
   const token = process.env.RAILWAY_ACCOUNT_TOKEN;
@@ -3603,7 +3610,10 @@ async function railwayGql(query, variables = {}) {
 // Railway Metrics (CPU, memory, network, disk)
 app.get("/setup/api/railway/metrics", requireSetupAuth, async (req, res) => {
   try {
-    const hours = Math.min(Number(req.query?.hours) || 6, 168); // max 7 days
+    const { environmentId, serviceId } = getRailwayIds();
+    let hours = Number(req.query?.hours);
+    if (!Number.isFinite(hours)) hours = 6;
+    hours = Math.min(Math.max(Math.trunc(hours), 1), 168); // clamp 1-168 hours
     const startDate = new Date(Date.now() - hours * 3600_000).toISOString();
     const measurements = ["CPU_USAGE", "CPU_LIMIT", "MEMORY_USAGE_GB", "MEMORY_LIMIT_GB", "NETWORK_RX_GB", "NETWORK_TX_GB", "DISK_USAGE_GB"];
     const data = await railwayGql(
@@ -3614,7 +3624,7 @@ app.get("/setup/api/railway/metrics", requireSetupAuth, async (req, res) => {
           values { ts value }
         }
       }`,
-      { envId: RAILWAY_ENVIRONMENT_ID, svcId: RAILWAY_SERVICE_ID, startDate, measurements },
+      { envId: environmentId, svcId: serviceId, startDate, measurements },
     );
     // Summarise latest values for each measurement
     const summary = {};
@@ -3632,7 +3642,10 @@ app.get("/setup/api/railway/metrics", requireSetupAuth, async (req, res) => {
 // Railway Deployment Status & History
 app.get("/setup/api/railway/deployments", requireSetupAuth, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query?.limit) || 10, 50);
+    const { projectId, serviceId, environmentId } = getRailwayIds();
+    let limit = Number(req.query?.limit);
+    if (!Number.isFinite(limit)) limit = 10;
+    limit = Math.min(Math.max(Math.trunc(limit), 1), 50); // clamp 1-50
     const data = await railwayGql(
       `query($projectId: String!, $envId: String!, $svcId: String!) {
         deployments(first: ${limit}, input: { projectId: $projectId, environmentId: $envId, serviceId: $svcId }) {
@@ -3646,7 +3659,7 @@ app.get("/setup/api/railway/deployments", requireSetupAuth, async (req, res) => 
           }
         }
       }`,
-      { projectId: RAILWAY_PROJECT_ID, envId: RAILWAY_ENVIRONMENT_ID, svcId: RAILWAY_SERVICE_ID },
+      { projectId, envId: environmentId, svcId: serviceId },
     );
     const deployments = (data.deployments?.edges || []).map((e) => e.node);
     return res.json({ ok: true, deployments });
@@ -3682,9 +3695,12 @@ app.post("/setup/api/railway/deploy-action", requireSetupAuth, async (req, res) 
 // Railway Build & Runtime Logs
 app.get("/setup/api/railway/logs", requireSetupAuth, async (req, res) => {
   try {
+    const { projectId, serviceId, environmentId } = getRailwayIds();
     const deploymentId = req.query?.deploymentId;
     const type = req.query?.type || "runtime"; // "build" or "runtime"
-    const limit = Math.min(Number(req.query?.limit) || 200, 1000);
+    let limit = Number(req.query?.limit);
+    if (!Number.isFinite(limit)) limit = 200;
+    limit = Math.min(Math.max(Math.trunc(limit), 1), 1000); // clamp 1-1000
     if (!deploymentId) {
       // Get latest deployment ID automatically
       const depData = await railwayGql(
@@ -3693,7 +3709,7 @@ app.get("/setup/api/railway/logs", requireSetupAuth, async (req, res) => {
             edges { node { id status } }
           }
         }`,
-        { projectId: RAILWAY_PROJECT_ID, envId: RAILWAY_ENVIRONMENT_ID, svcId: RAILWAY_SERVICE_ID },
+        { projectId, envId: environmentId, svcId: serviceId },
       );
       const latest = depData.deployments?.edges?.[0]?.node;
       if (!latest) return res.status(404).json({ ok: false, error: "No deployments found" });
@@ -3714,8 +3730,9 @@ app.get("/setup/api/railway/logs", requireSetupAuth, async (req, res) => {
 // Railway Volume Backup Management
 app.get("/setup/api/railway/volume", requireSetupAuth, async (req, res) => {
   try {
+    const { projectId, environmentId } = getRailwayIds();
     const data = await railwayGql(
-      `query($projectId: String!, $envId: String!, $svcId: String!) {
+      `query($projectId: String!, $envId: String!) {
         project(id: $projectId) {
           volumes {
             edges {
@@ -3729,7 +3746,7 @@ app.get("/setup/api/railway/volume", requireSetupAuth, async (req, res) => {
           }
         }
       }`,
-      { projectId: RAILWAY_PROJECT_ID, envId: RAILWAY_ENVIRONMENT_ID, svcId: RAILWAY_SERVICE_ID },
+      { projectId, envId: environmentId },
     );
     const volumes = (data.project?.volumes?.edges || []).map((e) => ({
       ...e.node,
@@ -3792,7 +3809,8 @@ app.post("/setup/api/railway/env", requireSetupAuth, async (req, res) => {
     return res.status(400).json({ ok: false, error: "variables must be an object of { name: value } pairs" });
   }
   try {
-    const skip = skipDeploys !== false; // default true to avoid triggering redeploys
+    const { projectId, serviceId, environmentId } = getRailwayIds();
+    const shouldSkipDeploys = skipDeploys !== false; // default true to avoid triggering redeploys
     // Build clean variables object
     const cleanVars = {};
     for (const [name, value] of Object.entries(variables)) {
@@ -3805,26 +3823,26 @@ app.post("/setup/api/railway/env", requireSetupAuth, async (req, res) => {
       `mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }`,
       {
         input: {
-          projectId: RAILWAY_PROJECT_ID,
-          environmentId: RAILWAY_ENVIRONMENT_ID,
-          serviceId: RAILWAY_SERVICE_ID,
+          projectId,
+          environmentId,
+          serviceId,
           variables: cleanVars,
           replace: false,
         },
       },
     );
     const varNames = Object.keys(cleanVars);
-    // Trigger deploy only if explicitly requested
-    if (!skip) {
+    // Trigger redeploy when user explicitly sets skipDeploys to false
+    if (!shouldSkipDeploys) {
       try {
         await railwayGql(
           `mutation($svcId: String!, $envId: String!) { serviceInstanceRedeploy(serviceId: $svcId, environmentId: $envId) }`,
-          { svcId: RAILWAY_SERVICE_ID, envId: RAILWAY_ENVIRONMENT_ID },
+          { svcId: serviceId, envId: environmentId },
         );
       } catch { /* redeploy best-effort */ }
     }
-    appendActivity("railway_env_set", { count: varNames.length, variables: varNames, skipDeploys: skip });
-    return res.json({ ok: true, set: varNames, skipDeploys: skip, note: skip ? "Variables set without triggering redeploy. Redeploy manually when ready." : "Variables set. Redeploy triggered." });
+    appendActivity("railway_env_set", { count: varNames.length, variables: varNames, skipDeploys: shouldSkipDeploys });
+    return res.json({ ok: true, set: varNames, skipDeploys: shouldSkipDeploys, note: shouldSkipDeploys ? "Variables set without triggering redeploy. Redeploy manually when ready." : "Variables set. Redeploy triggered." });
   } catch (err) {
     return res.status(502).json({ ok: false, error: err.message });
   }
@@ -3833,6 +3851,7 @@ app.post("/setup/api/railway/env", requireSetupAuth, async (req, res) => {
 // Railway Service Info (replicas, health, config)
 app.get("/setup/api/railway/service", requireSetupAuth, async (_req, res) => {
   try {
+    const { projectId } = getRailwayIds();
     const data = await railwayGql(
       `query($projectId: String!) {
         project(id: $projectId) {
@@ -3860,7 +3879,7 @@ app.get("/setup/api/railway/service", requireSetupAuth, async (_req, res) => {
           }
         }
       }`,
-      { projectId: RAILWAY_PROJECT_ID },
+      { projectId },
     );
     return res.json({ ok: true, project: data.project });
   } catch (err) {

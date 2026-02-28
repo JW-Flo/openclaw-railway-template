@@ -54,6 +54,12 @@ curl -s -X PUT -H "Authorization: token ${GH_PAT}" -H "Content-Type: application
 
 Railway auto-deploys from main (~60-90s Docker build).
 
+### Railway API Auth Setup
+```bash
+AUTH=$(echo -n ":${SETUP_PASSWORD}" | base64)
+BASE="${OPENCLAW_BASE_URL:-https://openclaw-production-4e3d.up.railway.app}"
+```
+
 ### Set Railway Environment Variables
 ```bash
 # Batch set without triggering redeploy (preferred)
