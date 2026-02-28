@@ -402,6 +402,168 @@ function selectModelByTier(pool, tier, modelType) {
   return any[0] || null;
 }
 
+// ── Prompt Compression on Escalation ────────────────────────────────────
+
+const ESCALATION_CACHE_DIR = path.join(WORKSPACE_DIR, ".cache", "escalations");
+
+const COMPRESSION_SYSTEM_PROMPT = `You are a task briefing compiler for an AI coding assistant. Produce a concise, structured task brief that another AI model can execute efficiently.
+
+Output ONLY a markdown document with this exact structure:
+
+# Task Brief
+
+## Objective
+[1-2 sentences: what the user wants accomplished]
+
+## Task Type
+[One of: code-change, debugging, analysis, deployment, multi-project, infrastructure, documentation, planning]
+
+## Context
+[Key facts the executing model needs. Include project names, technologies, APIs mentioned. 2-5 bullet points max.]
+
+## Relevant Workspace Paths
+[List /data/workspace/<project> paths to examine. If unsure, say "Determine from context".]
+
+## Constraints
+[Requirements, deadlines, quality standards, or "None specified".]
+
+## Suggested Approach
+[2-4 numbered steps the executing model should follow]
+
+## Original Request
+[The user's complete original message, preserved verbatim]
+
+Rules:
+- Be precise and actionable
+- Do NOT fabricate file paths — only reference paths/projects explicitly mentioned
+- Keep the brief under 800 tokens (excluding Original Request)
+- The Original Request section MUST contain the COMPLETE unmodified user message
+- Known workspace projects: Project-AtlasIT, AWhittleWandering, market_agents, JW-Site`;
+
+async function compressPromptForEscalation(userMessage, triage, sessionId) {
+  const orToken = process.env.OPENROUTER_API_TOKEN?.trim();
+  if (!orToken) return null;
+
+  const startTime = Date.now();
+  try {
+    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${orToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash:free",
+        messages: [
+          { role: "system", content: COMPRESSION_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `Triage: tier=${triage.tier}, type=${triage.modelType}, reason=${triage.reason}\n\n--- USER MESSAGE ---\n${userMessage.slice(0, 10000)}`,
+          },
+        ],
+        max_tokens: 1500,
+        temperature: 0,
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+
+    if (!resp.ok) {
+      console.warn(`[compression] API error ${resp.status}`);
+      return null;
+    }
+
+    const data = await resp.json();
+    const briefing = data.choices?.[0]?.message?.content?.trim();
+    if (!briefing || briefing.length < 50) {
+      console.warn("[compression] briefing too short, skipping");
+      return null;
+    }
+
+    fs.mkdirSync(ESCALATION_CACHE_DIR, { recursive: true });
+    const briefingPath = path.join(ESCALATION_CACHE_DIR, `escalation-${sessionId}.md`);
+    fs.writeFileSync(briefingPath, briefing, "utf8");
+
+    const elapsed = Date.now() - startTime;
+    const origEst = Math.ceil(userMessage.length / 4);
+    const briefEst = Math.ceil(briefing.length / 4);
+    console.log(
+      `[compression] ${sessionId}: ~${origEst} tokens → ~${briefEst} tokens ` +
+      `(${origEst > 0 ? Math.round((1 - briefEst / origEst) * 100) : 0}% reduction) in ${elapsed}ms`
+    );
+
+    return { briefingPath, elapsed, originalChars: userMessage.length, briefingChars: briefing.length };
+  } catch (err) {
+    console.warn(`[compression] error: ${err.message}`);
+    return null;
+  }
+}
+
+function cleanExpiredBriefings() {
+  try {
+    if (!fs.existsSync(ESCALATION_CACHE_DIR)) return;
+    const now = Date.now();
+    const maxAge = 24 * 60 * 60 * 1000;
+    let cleaned = 0;
+    for (const file of fs.readdirSync(ESCALATION_CACHE_DIR)) {
+      if (!file.startsWith("escalation-")) continue;
+      const fp = path.join(ESCALATION_CACHE_DIR, file);
+      try {
+        if (now - fs.statSync(fp).mtimeMs > maxAge) { fs.unlinkSync(fp); cleaned++; }
+      } catch { /* skip */ }
+    }
+    if (cleaned > 0) console.log(`[compression] cleaned ${cleaned} expired briefing(s)`);
+  } catch { /* skip */ }
+}
+
+function buildCompressedMessage(compression) {
+  return [
+    `A task briefing has been prepared for you at: ${compression.briefingPath}`,
+    "",
+    "Read that file first. It contains:",
+    "- The task objective and type",
+    "- Relevant context and workspace paths",
+    "- Constraints and a suggested approach",
+    "- The user's complete original request",
+    "",
+    "Execute the task as described in the briefing. If the briefing is unclear, refer to the Original Request section for the user's exact words.",
+  ].join("\n");
+}
+
+async function triageAndPrepare(message, sessionId) {
+  const pool = readModelPool();
+  const triage = await triagePrompt(message);
+  const triageModel = selectModelByTier(pool, triage.tier, triage.modelType);
+  const isEscalation = triage.tier !== "free";
+
+  cleanExpiredBriefings();
+
+  // Start compression in parallel with model switch (only for paid tiers)
+  const compressionPromise = isEscalation
+    ? compressPromptForEscalation(message, triage, sessionId)
+    : Promise.resolve(null);
+
+  // Model switch
+  let previousModel = null;
+  if (triageModel) {
+    const currentModelRes = await runCmd(OPENCLAW_NODE, clawArgs(["models"]));
+    const currentMatch = currentModelRes.output.match(/Default\s*:\s*(.+)/);
+    previousModel = currentMatch ? currentMatch[1].trim() : null;
+    if (previousModel !== triageModel.id) {
+      await runCmd(OPENCLAW_NODE, clawArgs(["models", "set", triageModel.id]));
+    }
+    triageModel.usedToday++;
+    writeModelPool(pool);
+  }
+
+  const compression = await compressionPromise;
+
+  const agentMessage = compression
+    ? buildCompressedMessage(compression)
+    : message.trim().slice(0, 10000);
+
+  return { triage, triageModel, previousModel, compression, pool, agentMessage };
+}
+
 // ── Auto-scheduler background loop ─────────────────────────────────────
 
 let schedulerTimer = null;
@@ -4304,10 +4466,9 @@ app.post("/setup/api/chat/send", requireDashAuth, async (req, res) => {
     return res.status(429).json({ ok: false, error: concCheck.reason });
   }
 
-  // ── Free-first triage: let a free model decide if paid model is needed ──
-  const pool = readModelPool();
-  const triage = await triagePrompt(message);
-  const triageModel = selectModelByTier(pool, triage.tier, triage.modelType);
+  // ── Free-first triage + prompt compression on escalation ──
+  const { triage, triageModel, previousModel, compression, pool, agentMessage } =
+    await triageAndPrepare(message, sid);
   const modelTier = triageModel?.tier || "free";
 
   // Check model quota using the triaged tier
@@ -4315,19 +4476,6 @@ app.post("/setup/api/chat/send", requireDashAuth, async (req, res) => {
   if (!quotaCheck.allowed) {
     appendActivity("quota_exceeded", { userId: user.id, modelTier, reason: quotaCheck.reason }, user);
     return res.status(429).json({ ok: false, error: quotaCheck.reason });
-  }
-
-  // Switch to triaged model if different from current
-  let previousModel = null;
-  if (triageModel) {
-    const currentModelRes = await runCmd(OPENCLAW_NODE, clawArgs(["models"]));
-    const currentMatch = currentModelRes.output.match(/Default\s*:\s*(.+)/);
-    previousModel = currentMatch ? currentMatch[1].trim() : null;
-    if (previousModel !== triageModel.id) {
-      await runCmd(OPENCLAW_NODE, clawArgs(["models", "set", triageModel.id]));
-    }
-    triageModel.usedToday++;
-    writeModelPool(pool);
   }
 
   // Track session and usage
@@ -4347,7 +4495,7 @@ app.post("/setup/api/chat/send", requireDashAuth, async (req, res) => {
 
   const agentArgs = [
     "agent", "--session-id", sid,
-    "--message", message.trim().slice(0, 10000),
+    "--message", agentMessage,
     "--timeout", String(timeout),
   ];
 
@@ -4369,7 +4517,7 @@ app.post("/setup/api/chat/send", requireDashAuth, async (req, res) => {
     try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* closed */ }
   }
 
-  sendSSE("status", { status: "started", sessionId: sid, triageTier: triage.tier, model: triageModel?.id });
+  sendSSE("status", { status: "started", sessionId: sid, triageTier: triage.tier, model: triageModel?.id, compressed: !!compression, compressionMs: compression?.elapsed || 0 });
 
   proc.stdout?.on("data", (chunk) => {
     const text = chunk.toString("utf8");
@@ -4385,8 +4533,12 @@ app.post("/setup/api/chat/send", requireDashAuth, async (req, res) => {
 
   proc.on("close", (code) => {
     untrackSession(user.id, sid);
-    sendSSE("done", { code, output: fullOutput.slice(-5000), triageTier: triage.tier, model: triageModel?.id });
-    appendActivity("chat_message", { sessionId: sid, length: message.length, triageTier: triage.tier, model: triageModel?.id }, user);
+    sendSSE("done", {
+      code, output: fullOutput.slice(-5000), triageTier: triage.tier, model: triageModel?.id,
+      compressed: !!compression,
+      compressionSavings: compression ? { originalChars: compression.originalChars, briefingChars: compression.briefingChars, reductionPct: Math.round((1 - compression.briefingChars / compression.originalChars) * 100) } : null,
+    });
+    appendActivity("chat_message", { sessionId: sid, length: message.length, triageTier: triage.tier, model: triageModel?.id, compressed: !!compression, compressionMs: compression?.elapsed }, user);
     // Restore previous model after completion
     if (previousModel && triageModel && previousModel !== triageModel.id) {
       runCmd(OPENCLAW_NODE, clawArgs(["models", "set", previousModel])).catch(() => {});
@@ -4733,22 +4885,9 @@ app.post("/api/v1/agent/message", requireApiToken, async (req, res) => {
     return res.status(429).json({ ok: false, error: `Rate limited. Retry in ${rl.retryAfter}s.` });
   }
 
-  // ── Free-first triage ──
-  const pool = readModelPool();
-  const triage = await triagePrompt(message);
-  const triageModel = selectModelByTier(pool, triage.tier, triage.modelType);
-
-  let previousModel = null;
-  if (triageModel) {
-    const cur = await runCmd(OPENCLAW_NODE, clawArgs(["models"]));
-    const match = cur.output.match(/Default\s*:\s*(.+)/);
-    previousModel = match ? match[1].trim() : null;
-    if (previousModel !== triageModel.id) {
-      await runCmd(OPENCLAW_NODE, clawArgs(["models", "set", triageModel.id]));
-    }
-    triageModel.usedToday++;
-    writeModelPool(pool);
-  }
+  // ── Free-first triage + prompt compression on escalation ──
+  const { triage, triageModel, previousModel, compression, agentMessage } =
+    await triageAndPrepare(message, sid);
 
   // SSE streaming response
   res.writeHead(200, {
@@ -4760,7 +4899,7 @@ app.post("/api/v1/agent/message", requireApiToken, async (req, res) => {
 
   const proc = childProcess.spawn(OPENCLAW_NODE, clawArgs([
     "agent", "--session-id", sid,
-    "--message", message.trim().slice(0, 10000),
+    "--message", agentMessage,
     "--timeout", String(tout),
   ]), {
     env: { ...process.env, OPENCLAW_STATE_DIR: STATE_DIR, OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR },
@@ -4771,12 +4910,16 @@ app.post("/api/v1/agent/message", requireApiToken, async (req, res) => {
     try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* closed */ }
   }
 
-  sendSSE("status", { sessionId: sid, triageTier: triage.tier, model: triageModel?.id });
+  sendSSE("status", { sessionId: sid, triageTier: triage.tier, model: triageModel?.id, compressed: !!compression, compressionMs: compression?.elapsed || 0 });
   proc.stdout?.on("data", (d) => { const t = d.toString("utf8"); fullOutput += t; sendSSE("chunk", { text: t }); });
   proc.stderr?.on("data", (d) => { const t = d.toString("utf8"); fullOutput += t; sendSSE("chunk", { text: t }); });
   proc.on("close", (code) => {
-    sendSSE("done", { code, output: fullOutput.slice(-5000), triageTier: triage.tier, model: triageModel?.id });
-    appendActivity("api_agent_message", { sessionId: sid, tokenName: req.apiToken.name, triageTier: triage.tier, model: triageModel?.id });
+    sendSSE("done", {
+      code, output: fullOutput.slice(-5000), triageTier: triage.tier, model: triageModel?.id,
+      compressed: !!compression,
+      compressionSavings: compression ? { originalChars: compression.originalChars, briefingChars: compression.briefingChars, reductionPct: Math.round((1 - compression.briefingChars / compression.originalChars) * 100) } : null,
+    });
+    appendActivity("api_agent_message", { sessionId: sid, tokenName: req.apiToken.name, triageTier: triage.tier, model: triageModel?.id, compressed: !!compression, compressionMs: compression?.elapsed });
     if (previousModel && triageModel && previousModel !== triageModel.id) {
       runCmd(OPENCLAW_NODE, clawArgs(["models", "set", previousModel])).catch(() => {});
     }

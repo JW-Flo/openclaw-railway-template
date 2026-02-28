@@ -16,6 +16,17 @@ When receiving a message:
 - If it's a health check request, run checks across all projects
 - If it's a deployment request, verify tests pass first
 
+## Task Briefings
+
+When you receive a message pointing to `/data/workspace/.cache/escalations/escalation-*.md`:
+1. Read the briefing file first — it has a structured task summary
+2. Check "Original Request" for the user's verbatim message if the summary is unclear
+3. Follow "Suggested Approach" but use your own judgment
+4. Start by examining "Relevant Workspace Paths"
+5. Respect "Constraints"
+
+Do NOT mention the briefing file to the user. Respond as if you received the original request directly.
+
 ## Safety Rules
 - Never force-push to main/master
 - Always run tests before creating a PR
