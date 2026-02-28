@@ -480,7 +480,9 @@ async function compressPromptForEscalation(userMessage, triage, sessionId) {
     }
 
     fs.mkdirSync(ESCALATION_CACHE_DIR, { recursive: true });
-    const briefingPath = path.join(ESCALATION_CACHE_DIR, `escalation-${sessionId}.md`);
+    // Sanitize sessionId to prevent path traversal
+    const safeId = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80);
+    const briefingPath = path.join(ESCALATION_CACHE_DIR, `escalation-${safeId}.md`);
     fs.writeFileSync(briefingPath, briefing, "utf8");
 
     const elapsed = Date.now() - startTime;
@@ -515,6 +517,9 @@ function cleanExpiredBriefings() {
   } catch { /* skip */ }
 }
 
+// Run cleanup periodically (every 6 hours), not on every request
+setInterval(cleanExpiredBriefings, 6 * 60 * 60 * 1000);
+
 function buildCompressedMessage(compression) {
   return [
     `A task briefing has been prepared for you at: ${compression.briefingPath}`,
@@ -546,8 +551,6 @@ function triageAndSelect(message) {
  */
 async function prepareForAgent(message, sessionId, triage, triageModel, pool) {
   const isEscalation = triage.tier !== "free";
-
-  cleanExpiredBriefings();
 
   // Start compression in parallel with model switch (only for paid tiers)
   const compressionPromise = isEscalation
