@@ -3785,7 +3785,7 @@ app.post("/setup/api/railway/volume/restore", requireSetupAuth, async (req, res)
   }
 });
 
-// Railway Batch Environment Variable Setter (with skipDeploys support)
+// Railway Batch Environment Variable Setter (uses variableCollectionUpsert for atomic batch)
 app.post("/setup/api/railway/env", requireSetupAuth, async (req, res) => {
   const { variables, skipDeploys } = req.body || {};
   if (!variables || typeof variables !== "object" || Array.isArray(variables)) {
@@ -3793,25 +3793,29 @@ app.post("/setup/api/railway/env", requireSetupAuth, async (req, res) => {
   }
   try {
     const skip = skipDeploys !== false; // default true to avoid triggering redeploys
-    const results = [];
+    // Build clean variables object
+    const cleanVars = {};
     for (const [name, value] of Object.entries(variables)) {
-      if (typeof name !== "string" || !name.trim()) continue;
-      await railwayGql(
-        `mutation($input: VariableUpsertInput!) { variableUpsert(input: $input) }`,
-        {
-          input: {
-            projectId: RAILWAY_PROJECT_ID,
-            environmentId: RAILWAY_ENVIRONMENT_ID,
-            serviceId: RAILWAY_SERVICE_ID,
-            name: name.trim(),
-            value: String(value),
-          },
-        },
-      );
-      results.push(name);
+      if (typeof name === "string" && name.trim()) cleanVars[name.trim()] = String(value);
     }
-    // Trigger single deploy if we skipped individual deploys and there were changes
-    if (!skip && results.length > 0) {
+    if (Object.keys(cleanVars).length === 0) {
+      return res.status(400).json({ ok: false, error: "No valid variables provided" });
+    }
+    await railwayGql(
+      `mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }`,
+      {
+        input: {
+          projectId: RAILWAY_PROJECT_ID,
+          environmentId: RAILWAY_ENVIRONMENT_ID,
+          serviceId: RAILWAY_SERVICE_ID,
+          variables: cleanVars,
+          replace: false,
+        },
+      },
+    );
+    const varNames = Object.keys(cleanVars);
+    // Trigger deploy only if explicitly requested
+    if (!skip) {
       try {
         await railwayGql(
           `mutation($svcId: String!, $envId: String!) { serviceInstanceRedeploy(serviceId: $svcId, environmentId: $envId) }`,
@@ -3819,8 +3823,8 @@ app.post("/setup/api/railway/env", requireSetupAuth, async (req, res) => {
         );
       } catch { /* redeploy best-effort */ }
     }
-    appendActivity("railway_env_set", { count: results.length, variables: results, skipDeploys: skip });
-    return res.json({ ok: true, set: results, skipDeploys: skip, note: skip ? "Variables set without triggering redeploy. Redeploy manually when ready." : "Variables set. Redeploy triggered." });
+    appendActivity("railway_env_set", { count: varNames.length, variables: varNames, skipDeploys: skip });
+    return res.json({ ok: true, set: varNames, skipDeploys: skip, note: skip ? "Variables set without triggering redeploy. Redeploy manually when ready." : "Variables set. Redeploy triggered." });
   } catch (err) {
     return res.status(502).json({ ok: false, error: err.message });
   }
