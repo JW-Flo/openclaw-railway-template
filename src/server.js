@@ -3705,13 +3705,15 @@ app.get("/setup/api/railway/logs", requireSetupAuth, async (req, res) => {
       // Get latest deployment ID automatically
       const depData = await railwayGql(
         `query($projectId: String!, $envId: String!, $svcId: String!) {
-          deployments(first: 1, input: { projectId: $projectId, environmentId: $envId, serviceId: $svcId }) {
+          deployments(first: 5, input: { projectId: $projectId, environmentId: $envId, serviceId: $svcId }) {
             edges { node { id status } }
           }
         }`,
         { projectId, envId: environmentId, svcId: serviceId },
       );
-      const latest = depData.deployments?.edges?.[0]?.node;
+      // Pick the first deployment with a loggable status
+      const edges = depData.deployments?.edges || [];
+      const latest = edges.map((e) => e.node).find((n) => ["SUCCESS", "DEPLOYING", "CRASHED", "FAILED"].includes(n.status)) || edges[0]?.node;
       if (!latest) return res.status(404).json({ ok: false, error: "No deployments found" });
       req.query.deploymentId = latest.id;
     }
