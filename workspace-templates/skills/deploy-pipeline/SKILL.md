@@ -56,23 +56,34 @@ Railway auto-deploys from main (~60-90s Docker build).
 
 ### Set Railway Environment Variables
 ```bash
-curl -s -X POST https://backboard.railway.com/graphql/v2 \
-  -H "Authorization: Bearer ${RAILWAY_ACCOUNT_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"mutation { variableUpsert(input: { projectId: \"PROJECT_ID\", environmentId: \"ENV_ID\", serviceId: \"SERVICE_ID\", name: \"VAR_NAME\", value: \"VAR_VALUE\" }) }"}'
+# Batch set without triggering redeploy (preferred)
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  "$BASE/setup/api/railway/env" \
+  -d '{"variables":{"VAR_NAME":"VAR_VALUE","VAR2":"VALUE2"}}'
+# Set and trigger redeploy
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  "$BASE/setup/api/railway/env" \
+  -d '{"variables":{"VAR_NAME":"VAR_VALUE"},"skipDeploys":false}'
 ```
-
-**OpenClaw Railway IDs** (set as env vars or retrieve from Railway dashboard):
-- `RAILWAY_PROJECT_ID` — project identifier
-- `RAILWAY_SERVICE_ID` — service identifier
-- `RAILWAY_ENVIRONMENT_ID` — environment identifier
 
 ### Check Railway Deployment Status
 ```bash
-curl -s -X POST https://backboard.railway.com/graphql/v2 \
-  -H "Authorization: Bearer ${RAILWAY_ACCOUNT_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"query { deployments(first: 3, input: { projectId: \"'"${RAILWAY_PROJECT_ID}"'\", environmentId: \"'"${RAILWAY_ENVIRONMENT_ID}"'\", serviceId: \"'"${RAILWAY_SERVICE_ID}"'\" }) { edges { node { id status createdAt } } } }"}'
+# Last 5 deployments
+curl -s -H "Authorization: Basic $AUTH" "$BASE/setup/api/railway/deployments?limit=5"
+# Redeploy / restart / rollback
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  "$BASE/setup/api/railway/deploy-action" \
+  -d '{"action":"redeploy","deploymentId":"DEPLOY_ID"}'
+```
+
+### Railway Metrics & Logs
+```bash
+# CPU, memory, network, disk usage
+curl -s -H "Authorization: Basic $AUTH" "$BASE/setup/api/railway/metrics?hours=6"
+# Runtime logs
+curl -s -H "Authorization: Basic $AUTH" "$BASE/setup/api/railway/logs?type=runtime&limit=200"
+# Build logs
+curl -s -H "Authorization: Basic $AUTH" "$BASE/setup/api/railway/logs?type=build"
 ```
 
 ## Cloudflare Deployment

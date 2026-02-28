@@ -16,6 +16,7 @@
 - `RAILWAY_ACCOUNT_TOKEN` — Railway API token
 - `TELEGRAM_API_ID` — Telegram API ID
 - `TELEGRAM_API_HASH` — Telegram API hash
+- `OPENAI_API_KEY` — OpenAI API key
 - `GROK_API_KEY` — Grok API key
 
 ## Skills (OpenClaw Agent Skills)
@@ -62,6 +63,7 @@ These skills are tailored to the managed projects and deploy workflows:
 | `project-ops` | Fleet-wide git operations: sync, status, branch management across all 4 repos |
 | `market-agents` | Trading bot management: positions, signals, SQLite queries, health checks |
 | `deploy-pipeline` | Railway & Cloudflare CI/CD: deploy, verify, rollback, env var management |
+| `railway-ops` | Railway infrastructure: metrics, deployments, logs, volumes, backups, diagnostics |
 
 ### Creating New Custom Skills
 Place a directory in `/data/workspace/skills/<skill-name>/` with a `SKILL.md` file:
