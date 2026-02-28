@@ -75,7 +75,7 @@ open http://localhost:8080/setup  # password: test
   - **dashboard.html**: DevOps dashboard with overview, projects, models, and tools tabs
   - **loading.html**: Loading/splash page
   - **tui.html**: Terminal UI page
-- **workspace-templates/**: Agent personality templates (IDENTITY, USER, MEMORY, TOOLS, AGENTS, SOUL) auto-copied to workspace on first boot
+- **workspace-templates/**: Agent personality templates (IDENTITY, USER, MEMORY, TOOLS, AGENTS, SOUL) + custom skills (`deploy-pipeline`, `project-ops`, `market-agents`, `railway-ops`, `roadmap-planner`) auto-copied to workspace on first boot
 - **Dockerfile**: Single-stage build (installs OpenClaw, gh, jq, wrangler, railway CLI)
 
 ### Environment Variables
@@ -305,18 +305,47 @@ curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/js
 # Blocked: onboard, gateway (use dedicated endpoints instead)
 ```
 
-### Set Railway Environment Variables
+### Railway Infrastructure Management
 
-Use Railway's GraphQL API:
+All Railway operations are now available via wrapper API endpoints (no more raw GraphQL needed).
 
 ```bash
-curl -s -X POST https://backboard.railway.com/graphql/v2 \
-  -H "Authorization: Bearer ${RAILWAY_ACCOUNT_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"mutation { variableUpsert(input: { projectId: \"c57527ed-e599-42da-8f49-7fb30c6c4166\", environmentId: \"7932450e-bf32-4428-905e-de0c3dff381f\", serviceId: \"dac5966e-646e-4644-b3e9-cd31352f696d\", name: \"VAR_NAME\", value: \"VAR_VALUE\" }) }"}'
+# Set env vars (batch, without triggering redeploy by default)
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/railway/env -d '{"variables":{"VAR_NAME":"value","VAR2":"value2"}}'
+# Set env vars AND trigger redeploy
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/railway/env -d '{"variables":{"VAR":"val"},"skipDeploys":false}'
+
+# Metrics (CPU, memory, network, disk) - last 6 hours default, max 168
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/railway/metrics?hours=6
+
+# Deployment history (last 10 default, max 50)
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/railway/deployments?limit=10
+
+# Deploy actions (redeploy, restart, rollback, cancel)
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/railway/deploy-action -d '{"action":"redeploy","deploymentId":"DEPLOY_ID"}'
+
+# Build & runtime logs (auto-resolves latest deployment if none specified)
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/railway/logs?type=runtime&limit=200
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/railway/logs?type=build
+
+# Volume info (list volumes, sizes, state)
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/railway/volume
+
+# Volume backups (create, list, restore)
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/railway/volume/backup -d '{"volumeInstanceId":"VOL_INSTANCE_ID"}'
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/railway/volume/backups?volumeInstanceId=VOL_INSTANCE_ID
+curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
+  .../setup/api/railway/volume/restore -d '{"backupId":"BACKUP_ID","volumeInstanceId":"VOL_INSTANCE_ID"}'
+
+# Service info (project, services, replicas, domains, health config)
+curl -s -H "Authorization: Basic $AUTH" .../setup/api/railway/service
 ```
 
-Setting env vars triggers a redeploy (~60-90s).
+**Note**: Env var batch setter defaults to `skipDeploys: true`. Set `"skipDeploys": false` to auto-redeploy after setting.
 
 ### Gateway Management
 
@@ -439,6 +468,8 @@ echo "=== Health ===" && curl -s $BASE/healthz
 echo -e "\n=== Gateway ===" && curl -s $BASE/setup/healthz | python3 -m json.tool
 echo -e "\n=== Model ===" && curl -s -H "Authorization: Basic $AUTH" $BASE/setup/api/models/current
 echo -e "\n=== Projects ===" && curl -s -H "Authorization: Basic $AUTH" $BASE/setup/api/projects/status | python3 -m json.tool
+echo -e "\n=== Railway Metrics ===" && curl -s -H "Authorization: Basic $AUTH" $BASE/setup/api/railway/metrics?hours=1 | python3 -c "import sys,json; d=json.load(sys.stdin); [print(f'  {k}: {v[\"latest\"]}') for k,v in d.get('summary',{}).items()]" 2>/dev/null || echo "  (unavailable)"
+echo -e "\n=== Railway Deploys ===" && curl -s -H "Authorization: Basic $AUTH" "$BASE/setup/api/railway/deployments?limit=3" | python3 -c "import sys,json; d=json.load(sys.stdin); [print(f'  {x[\"status\"]:10s} {x[\"createdAt\"]:25s} {(x.get(\"meta\") or {}).get(\"commitMessage\",\"\")}') for x in d.get('deployments',[])]" 2>/dev/null || echo "  (unavailable)"
 echo -e "\n=== Credentials ===" && curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" $BASE/setup/api/shell -d '{"command":"for v in GH_PAT OPENAI_API_KEY OPENROUTER_API_TOKEN ANTHROPIC_API_KEY CLOUDFLARE_ACCOUNT_ID RAILWAY_ACCOUNT_TOKEN TELEGRAM_API_ID TELEGRAM_API_HASH GROK_API_KEY; do val=$(printenv $v); if [ -n \"$val\" ]; then echo \"$v: SET\"; else echo \"$v: MISSING\"; fi; done"}'
 ```
 
@@ -464,7 +495,7 @@ echo -e "\n=== Credentials ===" && curl -s -X POST -H "Authorization: Basic $AUT
 8. **Control UI reads token from localStorage, not URL params** → The `?token=` URL parameter is NOT used by the Control UI JS for WebSocket auth. The wrapper serves a bootstrap page at `/openclaw` that writes the token to `localStorage["openclaw.control.settings.v1"]` before loading the actual UI (src/server.js:1158-1183).
 9. **OpenClaw CLI `models` subcommand** → Use `openclaw models` (no args) for current model info. `models get` does NOT exist. `models list` and `models set <model>` work as expected.
 10. **Claude Code cannot browse the UI** → No Puppeteer/browser. Use `curl` against API endpoints for all management. `WebFetch` can fetch static HTML but cannot execute JS (so SPAs like `/dashboard` and `/openclaw` won't render).
-11. **Railway env vars trigger redeploy** → Setting variables via the GraphQL API automatically triggers a new deployment (~60-90s). Set multiple vars quickly to batch into one deploy.
+11. **Railway env vars trigger redeploy** → Use the batch endpoint `POST /setup/api/railway/env` with `skipDeploys: true` (default) to set multiple vars without triggering N separate redeploys. Manually redeploy when ready.
 12. **Squash merges require rebase** → After squash-merging a PR, the feature branch diverges from main. Always `git fetch origin main && git rebase origin/main` before the next PR.
 13. **Shell API blocklist uses word-boundary regex** → Simple `includes()` matching caused false positives (e.g., "dd" blocked "add"). Fixed to use `\b` word-boundary regex patterns.
 14. **Claude Max cannot be used with OpenClaw** → Anthropic blocked third-party OAuth access (Jan 2026). Only standard API keys from `console.anthropic.com` work. Max subscriptions are for claude.ai and Claude Code only.
@@ -472,3 +503,5 @@ echo -e "\n=== Credentials ===" && curl -s -X POST -H "Authorization: Basic $AUT
 16. **Both API providers need credits** → Check OpenRouter balance at `openrouter.ai/settings/credits` and Anthropic balance at `console.anthropic.com`. OpenClaw auto-disables profiles with billing errors (with backoff); reset via editing `auth-profiles.json`.
 17. **`gh` CLI may not be available** → In Claude Code sessions or CI environments, `gh` may not be installed. Always prefer the GitHub REST API via `curl -H "Authorization: token ${GH_PAT}"` for PR creation, review requests, merging, and issue management. The `gh` CLI is installed on the Railway instance but not guaranteed in development environments.
 18. **External API tokens** → API tokens created via `/setup/api/tokens/create` use `jclaw_` prefix and Bearer auth. Tokens are stored in `${STATE_DIR}/api-tokens.json`. External endpoints are at `/api/v1/*` (health, status, agent/message, tasks/add, tasks).
+19. **Railway API endpoints** → All Railway infrastructure management (metrics, deployments, logs, volumes, backups, env vars) is now available via `/setup/api/railway/*` endpoints. No need for raw GraphQL calls. Requires `RAILWAY_ACCOUNT_TOKEN` env var.
+20. **Railway Agent Skills** → The `railway-ops` workspace skill teaches the OpenClaw agent how to use the Railway API endpoints for infrastructure management. Auto-bootstrapped on first boot from `workspace-templates/skills/railway-ops/`.

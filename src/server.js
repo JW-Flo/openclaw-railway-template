@@ -1379,7 +1379,12 @@ app.get("/healthz", async (_req, res) => {
   if (isConfigured()) {
     gateway = isGatewayReady() ? "ready" : "starting";
   }
-  res.json({ ok: true, gateway });
+  res.json({
+    ok: true,
+    gateway,
+    version: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 8) || null,
+    uptime: Math.floor(process.uptime()),
+  });
 });
 
 app.get("/setup/healthz", async (_req, res) => {
@@ -1398,6 +1403,7 @@ app.get("/setup/healthz", async (_req, res) => {
     } catch {}
   }
 
+  const mem = process.memoryUsage();
   res.json({
     ok: true,
     wrapper: true,
@@ -1405,6 +1411,12 @@ app.get("/setup/healthz", async (_req, res) => {
     gatewayRunning,
     gatewayStarting: starting,
     gatewayReachable,
+    version: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+    deploymentId: process.env.RAILWAY_DEPLOYMENT_ID || null,
+    uptime: Math.floor(process.uptime()),
+    memoryMB: Math.floor(mem.rss / 1024 / 1024),
+    heapUsedMB: Math.floor(mem.heapUsed / 1024 / 1024),
+    nodeVersion: process.version,
   });
 });
 
@@ -1826,6 +1838,12 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
         path.join(STATE_DIR, "gateway.token"),
       ),
       railwayCommit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+      railwayDeploymentId: process.env.RAILWAY_DEPLOYMENT_ID || null,
+      railwayServiceId: process.env.RAILWAY_SERVICE_ID || null,
+      railwayEnvironmentId: process.env.RAILWAY_ENVIRONMENT_ID || null,
+      railwayPublicDomain: process.env.RAILWAY_PUBLIC_DOMAIN || null,
+      railwayPrivateDomain: process.env.RAILWAY_PRIVATE_DOMAIN || null,
+      railwayVolumeMountPath: process.env.RAILWAY_VOLUME_MOUNT_PATH || null,
     },
     openclaw: {
       entry: OPENCLAW_ENTRY,
@@ -3502,8 +3520,9 @@ app.get("/setup/api/tools/list", requireSetupAuth, async (_req, res) => {
     })
   );
 
-  const envVars = ["GH_PAT", "OPENROUTER_API_TOKEN", "ANTHROPIC_API_KEY", "CLOUDFLARE_ACCOUNT_ID",
-    "RAILWAY_ACCOUNT_TOKEN", "TELEGRAM_API_ID", "TELEGRAM_API_HASH", "GROK_API_KEY",
+  const envVars = ["GH_PAT", "OPENAI_API_KEY", "OPENROUTER_API_TOKEN", "ANTHROPIC_API_KEY", "CLOUDFLARE_ACCOUNT_ID",
+    "RAILWAY_ACCOUNT_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID", "RAILWAY_ENVIRONMENT_ID",
+    "TELEGRAM_API_ID", "TELEGRAM_API_HASH", "GROK_API_KEY",
     "SETUP_PASSWORD", "OPENCLAW_GATEWAY_TOKEN"];
   const envStatus = envVars.map(v => ({ name: v, set: !!process.env[v] }));
 
@@ -3550,6 +3569,322 @@ app.post("/setup/api/tools/set-env", requireSetupAuth, async (req, res) => {
     delete process.env[name];
   }
   return res.json({ ok: true, note: "Set in current process. For persistence across deploys, set via Railway env vars." });
+});
+
+// ── Railway GraphQL API Integration ─────────────────────────────────────
+
+const RAILWAY_GQL = "https://backboard.railway.com/graphql/v2";
+
+function getRailwayIds() {
+  const projectId = process.env.RAILWAY_PROJECT_ID;
+  const serviceId = process.env.RAILWAY_SERVICE_ID;
+  const environmentId = process.env.RAILWAY_ENVIRONMENT_ID;
+  if (!projectId || !serviceId || !environmentId) {
+    throw new Error("Missing Railway IDs: set RAILWAY_PROJECT_ID, RAILWAY_SERVICE_ID, and RAILWAY_ENVIRONMENT_ID");
+  }
+  return { projectId, serviceId, environmentId };
+}
+
+async function railwayGql(query, variables = {}) {
+  const token = process.env.RAILWAY_ACCOUNT_TOKEN;
+  if (!token) throw new Error("RAILWAY_ACCOUNT_TOKEN not set");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const r = await fetch(RAILWAY_GQL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!r.ok) throw new Error(`Railway API ${r.status}: ${await r.text()}`);
+    const json = await r.json();
+    if (json.errors?.length) throw new Error(json.errors.map((e) => e.message).join("; "));
+    return json.data;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// Railway Metrics (CPU, memory, network, disk)
+app.get("/setup/api/railway/metrics", requireSetupAuth, async (req, res) => {
+  try {
+    const { environmentId, serviceId } = getRailwayIds();
+    let hours = Number(req.query?.hours);
+    if (!Number.isFinite(hours)) hours = 6;
+    hours = Math.min(Math.max(Math.trunc(hours), 1), 168); // clamp 1-168 hours
+    const startDate = new Date(Date.now() - hours * 3600_000).toISOString();
+    const measurements = ["CPU_USAGE", "CPU_LIMIT", "MEMORY_USAGE_GB", "MEMORY_LIMIT_GB", "NETWORK_RX_GB", "NETWORK_TX_GB", "DISK_USAGE_GB"];
+    const data = await railwayGql(
+      `query($envId: String!, $svcId: String, $startDate: DateTime!, $measurements: [MetricMeasurement!]!) {
+        metrics(environmentId: $envId, serviceId: $svcId, startDate: $startDate, measurements: $measurements) {
+          measurement
+          tags { serviceId deploymentId }
+          values { ts value }
+        }
+      }`,
+      { envId: environmentId, svcId: serviceId, startDate, measurements },
+    );
+    // Summarise latest values for each measurement
+    const summary = {};
+    for (const m of data.metrics || []) {
+      const vals = m.values || [];
+      const latest = vals.length ? vals[vals.length - 1] : null;
+      summary[m.measurement] = { latest: latest?.value ?? null, latestTs: latest?.ts ?? null, dataPoints: vals.length };
+    }
+    return res.json({ ok: true, hours, summary, raw: data.metrics });
+  } catch (err) {
+    return res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+// Railway Deployment Status & History
+app.get("/setup/api/railway/deployments", requireSetupAuth, async (req, res) => {
+  try {
+    const { projectId, serviceId, environmentId } = getRailwayIds();
+    let limit = Number(req.query?.limit);
+    if (!Number.isFinite(limit)) limit = 10;
+    limit = Math.min(Math.max(Math.trunc(limit), 1), 50); // clamp 1-50
+    const data = await railwayGql(
+      `query($projectId: String!, $envId: String!, $svcId: String!) {
+        deployments(first: ${limit}, input: { projectId: $projectId, environmentId: $envId, serviceId: $svcId }) {
+          edges {
+            node {
+              id status createdAt updatedAt
+              staticUrl
+              meta { commitMessage commitHash branch image }
+              canRollback
+            }
+          }
+        }
+      }`,
+      { projectId, envId: environmentId, svcId: serviceId },
+    );
+    const deployments = (data.deployments?.edges || []).map((e) => e.node);
+    return res.json({ ok: true, deployments });
+  } catch (err) {
+    return res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+// Railway Redeploy / Restart / Rollback
+app.post("/setup/api/railway/deploy-action", requireSetupAuth, async (req, res) => {
+  const { action, deploymentId } = req.body || {};
+  if (!action || !["redeploy", "restart", "rollback", "cancel"].includes(action)) {
+    return res.status(400).json({ ok: false, error: "action must be: redeploy, restart, rollback, or cancel" });
+  }
+  if (!deploymentId || typeof deploymentId !== "string") {
+    return res.status(400).json({ ok: false, error: "deploymentId required" });
+  }
+  const mutations = {
+    redeploy: `mutation($id: String!) { deploymentRedeploy(id: $id) }`,
+    restart: `mutation($id: String!) { deploymentRestart(id: $id) }`,
+    rollback: `mutation($id: String!) { deploymentRollback(id: $id) }`,
+    cancel: `mutation($id: String!) { deploymentCancel(id: $id) }`,
+  };
+  try {
+    const data = await railwayGql(mutations[action], { id: deploymentId });
+    appendActivity("railway_deploy_action", { action, deploymentId });
+    return res.json({ ok: true, action, data });
+  } catch (err) {
+    return res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+// Railway Build & Runtime Logs
+app.get("/setup/api/railway/logs", requireSetupAuth, async (req, res) => {
+  try {
+    const { projectId, serviceId, environmentId } = getRailwayIds();
+    const deploymentId = req.query?.deploymentId;
+    const type = req.query?.type || "runtime"; // "build" or "runtime"
+    let limit = Number(req.query?.limit);
+    if (!Number.isFinite(limit)) limit = 200;
+    limit = Math.min(Math.max(Math.trunc(limit), 1), 1000); // clamp 1-1000
+    if (!deploymentId) {
+      // Get latest deployment ID automatically
+      const depData = await railwayGql(
+        `query($projectId: String!, $envId: String!, $svcId: String!) {
+          deployments(first: 1, input: { projectId: $projectId, environmentId: $envId, serviceId: $svcId }) {
+            edges { node { id status } }
+          }
+        }`,
+        { projectId, envId: environmentId, svcId: serviceId },
+      );
+      const latest = depData.deployments?.edges?.[0]?.node;
+      if (!latest) return res.status(404).json({ ok: false, error: "No deployments found" });
+      req.query.deploymentId = latest.id;
+    }
+    const depId = req.query.deploymentId;
+    const queryName = type === "build" ? "buildLogs" : "deploymentLogs";
+    const data = await railwayGql(
+      `query($deploymentId: String!, $limit: Int) { ${queryName}(deploymentId: $deploymentId, limit: $limit) { message timestamp severity } }`,
+      { deploymentId: depId, limit },
+    );
+    return res.json({ ok: true, type, deploymentId: depId, logs: data[queryName] || [] });
+  } catch (err) {
+    return res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+// Railway Volume Backup Management
+app.get("/setup/api/railway/volume", requireSetupAuth, async (req, res) => {
+  try {
+    const { projectId, environmentId } = getRailwayIds();
+    const data = await railwayGql(
+      `query($projectId: String!, $envId: String!) {
+        project(id: $projectId) {
+          volumes {
+            edges {
+              node {
+                id name
+                volumeInstances(environmentId: $envId) {
+                  edges { node { id mountPath currentSizeMB state externalId } }
+                }
+              }
+            }
+          }
+        }
+      }`,
+      { projectId, envId: environmentId },
+    );
+    const volumes = (data.project?.volumes?.edges || []).map((e) => ({
+      ...e.node,
+      instances: (e.node.volumeInstances?.edges || []).map((vi) => vi.node),
+    }));
+    return res.json({ ok: true, volumes });
+  } catch (err) {
+    return res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/setup/api/railway/volume/backup", requireSetupAuth, async (req, res) => {
+  const { volumeInstanceId } = req.body || {};
+  if (!volumeInstanceId) return res.status(400).json({ ok: false, error: "volumeInstanceId required" });
+  try {
+    const data = await railwayGql(
+      `mutation($id: String!) { volumeInstanceBackupCreate(volumeInstanceId: $id) }`,
+      { id: volumeInstanceId },
+    );
+    appendActivity("railway_volume_backup", { volumeInstanceId, action: "create" });
+    return res.json({ ok: true, data });
+  } catch (err) {
+    return res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+app.get("/setup/api/railway/volume/backups", requireSetupAuth, async (req, res) => {
+  const volumeInstanceId = req.query?.volumeInstanceId;
+  if (!volumeInstanceId) return res.status(400).json({ ok: false, error: "volumeInstanceId query param required" });
+  try {
+    const data = await railwayGql(
+      `query($id: String!) { volumeInstanceBackupList(volumeInstanceId: $id) { id createdAt sizeInMB state } }`,
+      { id: volumeInstanceId },
+    );
+    return res.json({ ok: true, backups: data.volumeInstanceBackupList || [] });
+  } catch (err) {
+    return res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/setup/api/railway/volume/restore", requireSetupAuth, async (req, res) => {
+  const { backupId, volumeInstanceId } = req.body || {};
+  if (!backupId || !volumeInstanceId) return res.status(400).json({ ok: false, error: "backupId and volumeInstanceId required" });
+  try {
+    const data = await railwayGql(
+      `mutation($backupId: String!, $volumeInstanceId: String!) { volumeInstanceBackupRestore(backupId: $backupId, volumeInstanceId: $volumeInstanceId) }`,
+      { backupId, volumeInstanceId },
+    );
+    appendActivity("railway_volume_backup", { backupId, volumeInstanceId, action: "restore" });
+    return res.json({ ok: true, data });
+  } catch (err) {
+    return res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+// Railway Batch Environment Variable Setter (uses variableCollectionUpsert for atomic batch)
+app.post("/setup/api/railway/env", requireSetupAuth, async (req, res) => {
+  const { variables, skipDeploys } = req.body || {};
+  if (!variables || typeof variables !== "object" || Array.isArray(variables)) {
+    return res.status(400).json({ ok: false, error: "variables must be an object of { name: value } pairs" });
+  }
+  try {
+    const { projectId, serviceId, environmentId } = getRailwayIds();
+    const shouldSkipDeploys = skipDeploys !== false; // default true to avoid triggering redeploys
+    // Build clean variables object
+    const cleanVars = {};
+    for (const [name, value] of Object.entries(variables)) {
+      if (typeof name === "string" && name.trim()) cleanVars[name.trim()] = String(value);
+    }
+    if (Object.keys(cleanVars).length === 0) {
+      return res.status(400).json({ ok: false, error: "No valid variables provided" });
+    }
+    await railwayGql(
+      `mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }`,
+      {
+        input: {
+          projectId,
+          environmentId,
+          serviceId,
+          variables: cleanVars,
+          replace: false,
+        },
+      },
+    );
+    const varNames = Object.keys(cleanVars);
+    // Trigger redeploy when user explicitly sets skipDeploys to false
+    if (!shouldSkipDeploys) {
+      try {
+        await railwayGql(
+          `mutation($svcId: String!, $envId: String!) { serviceInstanceRedeploy(serviceId: $svcId, environmentId: $envId) }`,
+          { svcId: serviceId, envId: environmentId },
+        );
+      } catch { /* redeploy best-effort */ }
+    }
+    appendActivity("railway_env_set", { count: varNames.length, variables: varNames, skipDeploys: shouldSkipDeploys });
+    return res.json({ ok: true, set: varNames, skipDeploys: shouldSkipDeploys, note: shouldSkipDeploys ? "Variables set without triggering redeploy. Redeploy manually when ready." : "Variables set. Redeploy triggered." });
+  } catch (err) {
+    return res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+// Railway Service Info (replicas, health, config)
+app.get("/setup/api/railway/service", requireSetupAuth, async (_req, res) => {
+  try {
+    const { projectId } = getRailwayIds();
+    const data = await railwayGql(
+      `query($projectId: String!) {
+        project(id: $projectId) {
+          id name description
+          services {
+            edges {
+              node {
+                id name icon
+                serviceInstances {
+                  edges {
+                    node {
+                      environmentId
+                      startCommand buildCommand
+                      healthcheckPath healthcheckTimeout
+                      numReplicas
+                      domains { serviceDomains { domain } customDomains { domain } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          environments {
+            edges { node { id name } }
+          }
+        }
+      }`,
+      { projectId },
+    );
+    return res.json({ ok: true, project: data.project });
+  } catch (err) {
+    return res.status(502).json({ ok: false, error: err.message });
+  }
 });
 
 // ── Activity Log API ────────────────────────────────────────────────────
