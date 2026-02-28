@@ -174,7 +174,8 @@ The user operates in **CST (Central Standard Time, America/Chicago)**. All cron 
 - **Control UI**: `/openclaw` (no auth needed, token auto-injected)
 - **Setup Wizard**: `/setup` (Basic auth)
 - **Current Provider**: OpenAI (`openai/gpt-4o-mini`)
-- **Fallbacks**: `openai/gpt-4.1-nano`, `openai/gpt-4.1-mini`, `openai/o4-mini` (reasoning), `openrouter/auto`
+- **Fallbacks**: `openai/gpt-4.1-nano`, `openai/gpt-4.1-mini`, `openai/gpt-4.1`, `openai/o4-mini` (reasoning), `google/gemini-2.5-flash:free`, `openrouter/auto`
+- **Routing**: Free-first triage (Gemini Flash classifies prompts → routes to cheapest capable model)
 - **Agent timeout**: 180 seconds
 - **Cron jobs**: `daily-health-check` (9 AM CT), `hourly-heartbeat` (every 1h)
 - **Agent personality**: Addresses user as "Joe" or "Overlord" (see workspace SOUL.md)
