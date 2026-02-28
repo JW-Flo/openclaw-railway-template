@@ -3716,14 +3716,28 @@ app.get("/setup/api/railway/logs", requireSetupAuth, async (req, res) => {
       req.query.deploymentId = latest.id;
     }
     const depId = req.query.deploymentId;
-    const queryName = type === "build" ? "buildLogs" : "deploymentLogs";
-    const data = await railwayGql(
-      `query($deploymentId: String!, $limit: Int) { ${queryName}(deploymentId: $deploymentId, limit: $limit) }`,
-      { deploymentId: depId, limit },
-    );
-    // Logs may be returned as an array of strings or objects depending on Railway API version
-    const rawLogs = data[queryName] || [];
-    const logs = Array.isArray(rawLogs) ? rawLogs : [];
+    // Try with subfields first; if the schema uses scalars, retry without
+    let data;
+    try {
+      data = await railwayGql(
+        `query($deploymentId: String!, $limit: Int) { deploymentLogs(deploymentId: $deploymentId, limit: $limit) { message timestamp severity } }`,
+        { deploymentId: depId, limit },
+      );
+    } catch (subFieldErr) {
+      if (subFieldErr.message.includes("no subfields") || subFieldErr.message.includes("GRAPHQL_VALIDATION_FAILED")) {
+        data = await railwayGql(
+          `query($deploymentId: String!, $limit: Int) { deploymentLogs(deploymentId: $deploymentId, limit: $limit) }`,
+          { deploymentId: depId, limit },
+        );
+      } else {
+        throw subFieldErr;
+      }
+    }
+    const rawLogs = data.deploymentLogs;
+    if (rawLogs == null) {
+      return res.status(502).json({ ok: false, error: "Unexpected null response from Railway logs API" });
+    }
+    const logs = Array.isArray(rawLogs) ? rawLogs : [rawLogs];
     return res.json({ ok: true, type, deploymentId: depId, logs });
   } catch (err) {
     return res.status(502).json({ ok: false, error: err.message });
