@@ -529,10 +529,22 @@ function buildCompressedMessage(compression) {
   ].join("\n");
 }
 
-async function triageAndPrepare(message, sessionId) {
+/**
+ * Phase 1: Triage only (no side effects). Safe to call before quota checks.
+ */
+function triageAndSelect(message) {
   const pool = readModelPool();
-  const triage = await triagePrompt(message);
-  const triageModel = selectModelByTier(pool, triage.tier, triage.modelType);
+  return triagePrompt(message).then((triage) => {
+    const triageModel = selectModelByTier(pool, triage.tier, triage.modelType);
+    return { triage, triageModel, pool };
+  });
+}
+
+/**
+ * Phase 2: Compress + model-switch (has side effects). Call after quota check passes.
+ * Compression and model switch run in parallel for minimal latency.
+ */
+async function prepareForAgent(message, sessionId, triage, triageModel, pool) {
   const isEscalation = triage.tier !== "free";
 
   cleanExpiredBriefings();
@@ -561,7 +573,7 @@ async function triageAndPrepare(message, sessionId) {
     ? buildCompressedMessage(compression)
     : message.trim().slice(0, 10000);
 
-  return { triage, triageModel, previousModel, compression, pool, agentMessage };
+  return { previousModel, compression, agentMessage };
 }
 
 // ── Auto-scheduler background loop ─────────────────────────────────────
@@ -4466,17 +4478,20 @@ app.post("/setup/api/chat/send", requireDashAuth, async (req, res) => {
     return res.status(429).json({ ok: false, error: concCheck.reason });
   }
 
-  // ── Free-first triage + prompt compression on escalation ──
-  const { triage, triageModel, previousModel, compression, pool, agentMessage } =
-    await triageAndPrepare(message, sid);
+  // ── Phase 1: Triage (no side effects) ──
+  const { triage, triageModel, pool } = await triageAndSelect(message);
   const modelTier = triageModel?.tier || "free";
 
-  // Check model quota using the triaged tier
+  // Check model quota BEFORE any side effects
   const quotaCheck = checkUserQuota(user.id, user.role, modelTier);
   if (!quotaCheck.allowed) {
     appendActivity("quota_exceeded", { userId: user.id, modelTier, reason: quotaCheck.reason }, user);
     return res.status(429).json({ ok: false, error: quotaCheck.reason });
   }
+
+  // ── Phase 2: Compress + model-switch (side effects, after quota passes) ──
+  const { previousModel, compression, agentMessage } =
+    await prepareForAgent(message, sid, triage, triageModel, pool);
 
   // Track session and usage
   trackSession(user.id, sid);
@@ -4885,9 +4900,12 @@ app.post("/api/v1/agent/message", requireApiToken, async (req, res) => {
     return res.status(429).json({ ok: false, error: `Rate limited. Retry in ${rl.retryAfter}s.` });
   }
 
-  // ── Free-first triage + prompt compression on escalation ──
-  const { triage, triageModel, previousModel, compression, agentMessage } =
-    await triageAndPrepare(message, sid);
+  // ── Phase 1: Triage (no side effects) ──
+  const { triage, triageModel, pool } = await triageAndSelect(message);
+
+  // ── Phase 2: Compress + model-switch (side effects) ──
+  const { previousModel, compression, agentMessage } =
+    await prepareForAgent(message, sid, triage, triageModel, pool);
 
   // SSE streaming response
   res.writeHead(200, {
