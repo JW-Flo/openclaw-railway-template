@@ -3716,29 +3716,14 @@ app.get("/setup/api/railway/logs", requireSetupAuth, async (req, res) => {
       req.query.deploymentId = latest.id;
     }
     const depId = req.query.deploymentId;
-    // Try with subfields first; if the schema uses scalars, retry without
-    let data;
-    try {
-      data = await railwayGql(
-        `query($deploymentId: String!, $limit: Int) { deploymentLogs(deploymentId: $deploymentId, limit: $limit) { message timestamp severity } }`,
-        { deploymentId: depId, limit },
-      );
-    } catch (subFieldErr) {
-      if (subFieldErr.message.includes("no subfields") || subFieldErr.message.includes("GRAPHQL_VALIDATION_FAILED")) {
-        data = await railwayGql(
-          `query($deploymentId: String!, $limit: Int) { deploymentLogs(deploymentId: $deploymentId, limit: $limit) }`,
-          { deploymentId: depId, limit },
-        );
-      } else {
-        throw subFieldErr;
-      }
-    }
-    const rawLogs = data.deploymentLogs;
-    if (rawLogs == null) {
-      return res.status(502).json({ ok: false, error: "Unexpected null response from Railway logs API" });
-    }
-    const logs = Array.isArray(rawLogs) ? rawLogs : [rawLogs];
-    return res.json({ ok: true, type, deploymentId: depId, logs });
+    const validType = type === "build" ? "build" : "runtime";
+    const queryName = validType === "build" ? "buildLogs" : "deploymentLogs";
+    const data = await railwayGql(
+      `query($deploymentId: String!, $limit: Int) { ${queryName}(deploymentId: $deploymentId, limit: $limit) { message timestamp severity } }`,
+      { deploymentId: depId, limit },
+    );
+    const logs = data[queryName] || [];
+    return res.json({ ok: true, type: validType, deploymentId: depId, logs });
   } catch (err) {
     return res.status(502).json({ ok: false, error: err.message });
   }
@@ -3747,29 +3732,48 @@ app.get("/setup/api/railway/logs", requireSetupAuth, async (req, res) => {
 // Railway Volume Backup Management
 app.get("/setup/api/railway/volume", requireSetupAuth, async (req, res) => {
   try {
-    const { projectId, environmentId } = getRailwayIds();
+    const { projectId } = getRailwayIds();
     const data = await railwayGql(
-      `query($projectId: String!, $envId: String!) {
+      `query($projectId: String!) {
         project(id: $projectId) {
-          volumes {
-            edges {
-              node {
-                id name
-                volumeInstances(environmentId: $envId) {
-                  edges { node { id mountPath currentSizeMB state externalId } }
-                }
-              }
-            }
-          }
+          volumes { edges { node { id name createdAt } } }
         }
       }`,
-      { projectId, envId: environmentId },
+      { projectId },
     );
-    const volumes = (data.project?.volumes?.edges || []).map((e) => ({
-      ...e.node,
-      instances: (e.node.volumeInstances?.edges || []).map((vi) => vi.node),
-    }));
-    return res.json({ ok: true, volumes });
+    const volumes = (data.project?.volumes?.edges || []).map((e) => e.node);
+    // Fetch volume instance details if we have a volume
+    let volumeInstance = null;
+    if (volumes.length > 0) {
+      try {
+        // Use the shell to find volume instance ID from Railway env
+        const viId = process.env.RAILWAY_VOLUME_INSTANCE_ID;
+        if (viId) {
+          const viData = await railwayGql(
+            `query($id: String!) { volumeInstance(id: $id) { id mountPath currentSizeMB state environmentId serviceId } }`,
+            { id: viId },
+          );
+          volumeInstance = viData.volumeInstance;
+        }
+      } catch { /* volume instance query failed, continue without */ }
+    }
+    // Local disk usage from the volume mount path
+    const mountPath = process.env.RAILWAY_VOLUME_MOUNT_PATH || "/data";
+    let diskInfo = null;
+    const df = await runCmd("sh", ["-c", `df -BM ${mountPath} 2>/dev/null | tail -1 | awk '{print $2,$3,$4,$5}'`]);
+    if (df.code === 0 && df.output.trim()) {
+      const parts = df.output.trim().split(/\s+/);
+      if (parts.length >= 4) {
+        diskInfo = {
+          totalMB: parseInt(parts[0], 10) || 0,
+          usedMB: parseInt(parts[1], 10) || 0,
+          availMB: parseInt(parts[2], 10) || 0,
+          usePct: parts[3],
+          mountPath,
+        };
+      }
+    }
+    return res.json({ ok: true, volumes, volumeInstance, disk: diskInfo });
   } catch (err) {
     return res.status(502).json({ ok: false, error: err.message });
   }
@@ -3780,11 +3784,11 @@ app.post("/setup/api/railway/volume/backup", requireSetupAuth, async (req, res) 
   if (!volumeInstanceId) return res.status(400).json({ ok: false, error: "volumeInstanceId required" });
   try {
     const data = await railwayGql(
-      `mutation($id: String!) { volumeInstanceBackupCreate(volumeInstanceId: $id) }`,
+      `mutation($id: String!) { volumeInstanceBackupCreate(volumeInstanceId: $id) { workflowId } }`,
       { id: volumeInstanceId },
     );
     appendActivity("railway_volume_backup", { volumeInstanceId, action: "create" });
-    return res.json({ ok: true, data });
+    return res.json({ ok: true, workflowId: data.volumeInstanceBackupCreate?.workflowId });
   } catch (err) {
     return res.status(502).json({ ok: false, error: err.message });
   }
@@ -3795,7 +3799,7 @@ app.get("/setup/api/railway/volume/backups", requireSetupAuth, async (req, res) 
   if (!volumeInstanceId) return res.status(400).json({ ok: false, error: "volumeInstanceId query param required" });
   try {
     const data = await railwayGql(
-      `query($id: String!) { volumeInstanceBackupList(volumeInstanceId: $id) { id createdAt sizeInMB state } }`,
+      `query($id: String!) { volumeInstanceBackupList(volumeInstanceId: $id) { id name createdAt usedMB referencedMB volumeInstanceSizeMB expiresAt } }`,
       { id: volumeInstanceId },
     );
     return res.json({ ok: true, backups: data.volumeInstanceBackupList || [] });
@@ -3809,8 +3813,8 @@ app.post("/setup/api/railway/volume/restore", requireSetupAuth, async (req, res)
   if (!backupId || !volumeInstanceId) return res.status(400).json({ ok: false, error: "backupId and volumeInstanceId required" });
   try {
     const data = await railwayGql(
-      `mutation($backupId: String!, $volumeInstanceId: String!) { volumeInstanceBackupRestore(backupId: $backupId, volumeInstanceId: $volumeInstanceId) }`,
-      { backupId, volumeInstanceId },
+      `mutation($volumeInstanceBackupId: String!, $volumeInstanceId: String!) { volumeInstanceBackupRestore(volumeInstanceBackupId: $volumeInstanceBackupId, volumeInstanceId: $volumeInstanceId) }`,
+      { volumeInstanceBackupId: backupId, volumeInstanceId },
     );
     appendActivity("railway_volume_backup", { backupId, volumeInstanceId, action: "restore" });
     return res.json({ ok: true, data });
