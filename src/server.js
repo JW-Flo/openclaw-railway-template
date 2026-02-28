@@ -3653,7 +3653,7 @@ app.get("/setup/api/railway/deployments", requireSetupAuth, async (req, res) => 
             node {
               id status createdAt updatedAt
               staticUrl
-              meta { commitMessage commitHash branch image }
+              meta
               canRollback
             }
           }
@@ -3718,10 +3718,13 @@ app.get("/setup/api/railway/logs", requireSetupAuth, async (req, res) => {
     const depId = req.query.deploymentId;
     const queryName = type === "build" ? "buildLogs" : "deploymentLogs";
     const data = await railwayGql(
-      `query($deploymentId: String!, $limit: Int) { ${queryName}(deploymentId: $deploymentId, limit: $limit) { message timestamp severity } }`,
+      `query($deploymentId: String!, $limit: Int) { ${queryName}(deploymentId: $deploymentId, limit: $limit) }`,
       { deploymentId: depId, limit },
     );
-    return res.json({ ok: true, type, deploymentId: depId, logs: data[queryName] || [] });
+    // Logs may be returned as an array of strings or objects depending on Railway API version
+    const rawLogs = data[queryName] || [];
+    const logs = Array.isArray(rawLogs) ? rawLogs : [];
+    return res.json({ ok: true, type, deploymentId: depId, logs });
   } catch (err) {
     return res.status(502).json({ ok: false, error: err.message });
   }
