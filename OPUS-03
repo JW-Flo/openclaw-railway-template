@@ -1,0 +1,56 @@
+OPUS-03: Testing Framework & CI/CD
+JClaw / OpenClaw Railway Template QA Remediation
+MODEL: Claude Opus | Est: 40-50 min | CONCURRENT with Opus-02 + Sonnet-01
+Trigger: "Execute opus-03 testing and CI/CD"
+Runs concurrently with Opus-02 and Sonnet-01 after Opus-01 is merged. Rebase from main before starting.
+Branch: claude/testing-ci-[sessionId]
+Scope & File Boundaries
+Create test framework, write tests for Opus-01 security modules, set up CI/CD and linting. Creates: test/**,
+vitest.config.js, eslint.config.js, .prettierrc, .github/workflows/ci.yml. Modifies: package.json (devDependencies + scripts
+sections only). Does NOT touch src/server.js, src/alerts/, dashboard/ Svelte files, or any .md documentation.
+PARALLEL SAFETY: Creates test/, .github/, config files at repo root. Only shared file is package.json
+(devDependencies section — Opus-02 adds zero deps, Sonnet-01 adds zero deps, so no merge conflict).
+Task 1: Test Framework Bootstrap
+pnpm add -D vitest @vitest/coverage-v8 supertest. Create vitest.config.js (ESM — repo is type:module). Coverage
+thresholds: lines 60%, branches 50%, functions 60%. Add scripts to package.json: 'test': 'vitest run', 'test:watch': 'vitest',
+'test:coverage': 'vitest run --coverage'. Create test/ directory structure mirroring src/lib/ and src/middleware/. Create
+test/__mocks__/ with stubs for child_process.
+AC: pnpm test runs (exits 0). pnpm test:coverage generates report.
+Task 2: ESLint + Prettier (replacing 'node -c')
+Current 'lint' script is just node -c src/server.js (syntax check only). pnpm add -D eslint @eslint/js
+eslint-config-prettier prettier. Create eslint.config.js (flat config, ESM): extends recommended. Rules: no-eval,
+no-implied-eval, no-new-func. Custom rule or comment convention to warn on direct childProcess imports outside
+src/lib/safe-exec.js. Update lint script: eslint src/lib/ src/middleware/ src/alerts/ test/. Add lint:fix.
+Create .prettierrc: singleQuote:true, semi:true, trailingComma:'es5'.
+CRITICAL: Do NOT run eslint or prettier on src/server.js (5389-line monolith) or dashboard/. Only lint new modular files
++ tests. Reformatting the monolith creates ungodly merge conflicts and diff noise.
+AC: pnpm lint exits 0 on scoped files. server.js excluded.
+Task 3: safe-exec Unit Tests
+test/lib/safe-exec.test.js: Rejects disallowed commands (rm, curl, wget, python, bash, sh). Allows
+allowlisted commands (openclaw, git, node, ls, grep, cat, df). Args containing ; | & $ ` \ rejected. shell:false enforced in
+spawn options. Valid openclaw args pass through cleanly. Edge cases: empty args, undefined args, very long args.
+AC: 8+ test cases. All pass.
+Task 4: credential-store Unit Tests
+test/lib/credential-store.test.js: Encrypt/decrypt round-trip succeeds. Wrong password fails decrypt
+gracefully. Re-encryption with new password produces valid blob. listKeys returns stored key names. Empty store
+handled. Use tmp directories via vitest beforeEach/afterEach — tests must NOT touch /data.
+AC: 6+ test cases. All pass.
+Task 5: bootstrap-guard + CSRF + session-auth Tests
+test/lib/bootstrap-guard.test.js: hash verify pass/fail, missing file graceful handling, rebaseline updates
+manifest correctly. test/middleware/csrf.test.js: POST without token=403, with valid token=200.
+test/middleware/session-auth.test.js: create session, validate, destroy, expired session. For middleware
+tests, create a minimal Express app in each test file that mounts just the middleware under test.
+AC: 12+ combined test cases across 3 files. All pass.
+Task 6: GitHub Actions CI Pipeline
+Create .github/workflows/ci.yml. Trigger: push main + all PRs. Node 24 (per package.json engines). Cache
+pnpm store. Jobs: (a) lint: pnpm lint. (b) test: pnpm test:coverage, upload coverage artifact. (c) security: pnpm audit
+--audit-level=high (continue-on-error: true — report only for now). (d) build: docker build --target (verify Dockerfile
+compiles). Add CI status badge to README.md — insert ONE line at top of file, do NOT rewrite any other README
+content.
+README.md: Only prepend the badge line. Sonnet-01 handles documentation concurrently — avoid touching anything
+else.
+AC: CI runs on PR. All jobs pass. Badge visible in README.
+New: test/**, vitest.config.js, eslint.config.js, .prettierrc, .github/workflows/ci.yml. Modified: package.json (devDeps +
+scripts), README.md (badge line only).
+Commit: test: [scope] [session-url]. PR: 'feat(quality): tests, CI, lint'. Copilot.
+JClaw QA — Opus 03 of 05 | Concurrent with Opus-02 + Sonnet-01
