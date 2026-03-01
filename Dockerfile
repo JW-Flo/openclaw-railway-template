@@ -12,6 +12,7 @@ RUN apt-get update \
     build-essential \
     jq \
     ffmpeg \
+    netcat-openbsd \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies for skills (e.g. web-search uses duckduckgo-search)
@@ -55,8 +56,9 @@ ENV HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
 ENV HOMEBREW_CELLAR="/home/linuxbrew/.linuxbrew/Cellar"
 ENV HOMEBREW_REPOSITORY="/home/linuxbrew/.linuxbrew/Homebrew"
 
-# Install skill dependencies via brew (uv for nano-banana-pro, himalaya for email)
-RUN brew install uv himalaya
+# Install skill dependencies via brew
+# uv: nano-banana-pro, himalaya: email, steipete/tap/wacli: WhatsApp CLI
+RUN brew install uv himalaya steipete/tap/wacli
 
 # Create npx wrapper scripts for skill CLIs not available via brew/apt
 RUN mkdir -p /home/openclaw/.local/bin \

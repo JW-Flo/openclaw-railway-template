@@ -4111,6 +4111,74 @@ app.get("/setup/api/activity", requireSetupAuth, (req, res) => {
   return res.json({ ok: true, entries, typeCounts, total: entries.length });
 });
 
+// ── Log Export / Download ──────────────────────────────────────────────
+app.get("/setup/api/logs/export", requireSetupAuth, async (req, res) => {
+  const format = (req.query?.format || "json").toLowerCase();
+  const include = (req.query?.include || "all").toLowerCase(); // all, gateway, activity, debug
+
+  const sections = {};
+
+  if (include === "all" || include === "debug") {
+    const v = await runCmd(OPENCLAW_NODE, clawArgs(["--version"]));
+    sections.system = {
+      exportedAt: new Date().toISOString(),
+      node: process.version,
+      openclawVersion: v.output.trim(),
+      port: PORT,
+      stateDir: STATE_DIR,
+      workspaceDir: WORKSPACE_DIR,
+      uptime: process.uptime(),
+      memoryMB: Math.round(process.memoryUsage().rss / 1048576),
+      railway: {
+        commit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+        deploymentId: process.env.RAILWAY_DEPLOYMENT_ID || null,
+        serviceId: process.env.RAILWAY_SERVICE_ID || null,
+        publicDomain: process.env.RAILWAY_PUBLIC_DOMAIN || null,
+      },
+    };
+  }
+
+  if (include === "all" || include === "gateway") {
+    sections.gatewayLogs = gatewayLogs.slice();
+  }
+
+  if (include === "all" || include === "activity") {
+    sections.activityLog = filterActivityLog({ limit: 2000 });
+  }
+
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  res.setHeader("Cache-Control", "no-store");
+
+  if (format === "text") {
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="jclaw-logs-${ts}.txt"`);
+    let out = "";
+    if (sections.system) {
+      out += "=== SYSTEM INFO ===\n";
+      for (const [k, v] of Object.entries(sections.system)) {
+        out += `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}\n`;
+      }
+      out += "\n";
+    }
+    if (sections.gatewayLogs) {
+      out += "=== GATEWAY LOGS ===\n";
+      out += sections.gatewayLogs.join("\n") + "\n\n";
+    }
+    if (sections.activityLog) {
+      out += "=== ACTIVITY LOG ===\n";
+      for (const e of sections.activityLog) {
+        out += `[${e.ts}] ${e.type} ${e.user?.username || "system"} ${JSON.stringify(e.detail || {})}\n`;
+      }
+    }
+    return res.send(out);
+  }
+
+  // Default: JSON
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="jclaw-logs-${ts}.json"`);
+  return res.json(sections);
+});
+
 // Alert config management
 app.get("/setup/api/alerts/config", requireSetupAuth, (_req, res) => {
   return res.json({ ok: true, config: readAlertConfig() });
