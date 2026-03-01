@@ -38,23 +38,13 @@ if [ -d /app/workspace-templates ]; then
   fi
 fi
 
-# Configure git and gh CLI with GH_PAT if available
+# Configure git with GH_PAT if available
 if [ -n "$GH_PAT" ]; then
   gosu openclaw git config --global credential.helper store
   echo "https://x-access-token:${GH_PAT}@github.com" > /home/openclaw/.git-credentials
   chown openclaw:openclaw /home/openclaw/.git-credentials
   chmod 600 /home/openclaw/.git-credentials
-
-  # Authenticate gh CLI so github skill and gh commands work
-  export GH_TOKEN="$GH_PAT"
-  export GITHUB_TOKEN="$GH_PAT"
-  GH_USER=$(gosu openclaw gh api user --jq '.login' 2>/dev/null || echo "")
-  if [ -n "$GH_USER" ]; then
-    export GITHUB_USERNAME="$GH_USER"
-    echo "[entrypoint] GitHub credentials configured (gh + git) for $GH_USER"
-  else
-    echo "[entrypoint] GitHub credentials configured (git only, gh auth check failed)"
-  fi
+  echo "[entrypoint] GitHub credentials configured"
 fi
 
 exec gosu openclaw node src/server.js

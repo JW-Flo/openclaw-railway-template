@@ -29,6 +29,13 @@
     .animate-spin {
       animation: spin 0.8s linear infinite;
     }
+    /* Mobile: hide terminal, show message */
+    #mobile-warning { display: none; }
+    @media (max-width: 768px) {
+      #mobile-warning { display: flex; }
+      #terminal-container,
+      #loading-overlay { display: none !important; }
+    }
   </style>
 </head>
 <body class="bg-neutral-950 text-neutral-100 min-h-screen font-sans">
@@ -39,22 +46,34 @@
       </picture>
       <span class="text-neutral-500 text-sm">Terminal</span>
     </div>
-    <div id="status" class="flex items-center gap-2 text-sm">
-      <span class="w-2 h-2 rounded-full bg-yellow-500"></span>
+    <div id="status" role="status" aria-live="polite" class="flex items-center gap-2 text-sm">
+      <span class="w-2 h-2 rounded-full bg-yellow-500" aria-hidden="true"></span>
       <span class="text-neutral-400">Connecting...</span>
     </div>
   </div>
 
-  <div id="loading-overlay" class="absolute inset-0 top-[56px] bg-neutral-950 flex items-center justify-center z-40">
+  <div id="loading-overlay" role="status" aria-label="Starting terminal session" class="absolute inset-0 top-[56px] bg-neutral-950 flex items-center justify-center z-40">
     <div class="text-center">
-      <div class="w-8 h-8 border-2 border-neutral-700 border-t-purple-500 rounded-full animate-spin mx-auto mb-4"></div>
+      <div class="w-8 h-8 border-2 border-neutral-700 border-t-purple-500 rounded-full animate-spin mx-auto mb-4" aria-hidden="true"></div>
       <p class="text-neutral-400 text-sm">Starting terminal session...</p>
     </div>
   </div>
 
-  <div id="terminal-container"></div>
+  <!-- Mobile unsupported message -->
+  <div id="mobile-warning" class="absolute inset-0 top-[56px] bg-neutral-950 items-center justify-center z-40">
+    <div class="text-center px-6 max-w-sm">
+      <svg class="w-12 h-12 text-neutral-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3" />
+      </svg>
+      <h2 class="text-neutral-200 font-semibold text-lg mb-2">Mobile not supported</h2>
+      <p class="text-neutral-400 text-sm mb-6">The web terminal requires a desktop browser. Please use SSH or access this page from a larger screen.</p>
+      <a href="/setup" class="inline-block bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors">Back to Setup</a>
+    </div>
+  </div>
 
-  <div id="error-overlay" class="hidden fixed inset-0 bg-neutral-950/90 flex items-center justify-center z-50">
+  <div id="terminal-container" aria-label="Terminal" role="application"></div>
+
+  <div id="error-overlay" role="alertdialog" aria-modal="true" aria-labelledby="error-title" class="hidden fixed inset-0 bg-neutral-950/90 flex items-center justify-center z-50">
     <div class="bg-neutral-900 border border-neutral-800 rounded-lg p-6 max-w-md mx-4 text-center">
       <div class="text-red-400 text-lg font-medium mb-2" id="error-title">Connection Error</div>
       <div class="text-neutral-400 text-sm mb-4" id="error-message"></div>
@@ -145,6 +164,8 @@
     const maxReconnectAttempts = 3;
 
     function connect() {
+      // Don't consume the TUI session on mobile devices
+      if (window.innerWidth < 768) return;
       setStatus('connecting', 'Connecting...');
       sessionStarted = false;
       loadingOverlay.style.display = 'flex';

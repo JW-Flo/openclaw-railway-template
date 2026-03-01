@@ -22,14 +22,14 @@
   </style>
 </head>
 <body class="bg-neutral-100 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 min-h-screen font-sans flex items-center justify-center">
-  <div class="text-center px-6">
-    <div class="flex justify-center mb-6">
+  <div class="text-center px-6" role="status" aria-label="OpenClaw is starting up">
+    <div class="flex justify-center mb-6" aria-hidden="true">
       <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
-        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="OpenClaw" class="max-w-[200px] h-auto">
+        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="" class="max-w-[200px] h-auto">
       </picture>
     </div>
-    <div class="w-10 h-10 border-2 border-transparent border-t-red-500 rounded-full animate-spin-slow mx-auto mb-8"></div>
+    <div class="w-10 h-10 border-2 border-transparent border-t-red-500 rounded-full animate-spin-slow mx-auto mb-8" aria-hidden="true"></div>
     <h1 class="text-xl font-semibold tracking-tight mb-3">OpenClaw is starting up</h1>
     <p class="text-neutral-500 text-sm">This page will auto-refresh when the gateway is ready.</p>
   </div>

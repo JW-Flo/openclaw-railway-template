@@ -18,8 +18,6 @@ export default [
         setInterval: 'readonly',
         clearInterval: 'readonly',
         URL: 'readonly',
-        fetch: 'readonly',
-        AbortSignal: 'readonly',
       },
     },
     rules: {

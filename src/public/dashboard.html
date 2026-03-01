@@ -369,44 +369,55 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
   .header-right { gap: 6px; }
   .quota-badge { display: none; }
 }
+/* ── Accessibility ────────────────────────────────────────────────────── */
+.skip-link {
+  position: absolute; top: -100%; left: 0; background: var(--accent); color: #fff;
+  padding: 8px 16px; border-radius: 0 0 6px 0; font-weight: 600; font-size: 14px;
+  z-index: 9999; text-decoration: none;
+}
+.skip-link:focus { top: 0; }
+:focus-visible { outline: 2px solid var(--accent2); outline-offset: 2px; border-radius: 2px; }
+/* Tab keyboard focus */
+.tab:focus-visible { outline: 2px solid var(--accent2); outline-offset: -2px; }
 </style>
 </head>
 <body>
+<a href="#main-content" class="skip-link">Skip to main content</a>
 
-<div class="header">
+<header class="header" role="banner">
   <h1>OpenClaw Dashboard</h1>
   <div class="header-right">
-    <span class="quota-badge" id="quota-badge" title="Your daily usage quota"></span>
-    <div class="nav-links">
+    <span class="quota-badge" id="quota-badge" title="Your daily usage quota" aria-label="Daily usage quota"></span>
+    <nav class="nav-links" aria-label="Site navigation">
       <a href="/setup">Setup</a>
       <a href="/openclaw">Control UI</a>
       <a href="/tui">TUI</a>
-    </div>
-    <button class="theme-toggle" id="theme-toggle" title="Toggle theme (Ctrl+Shift+T)">&#9789;</button>
+    </nav>
+    <button class="theme-toggle" id="theme-toggle" title="Toggle theme (Ctrl+Shift+T)" aria-label="Toggle color theme">&#9789;</button>
   </div>
-</div>
+</header>
 
 <!-- News Ticker Banner -->
-<div class="ticker-bar" id="ticker-bar">
-  <div class="ticker-label">LIVE</div>
+<div class="ticker-bar" id="ticker-bar" role="region" aria-label="Live activity feed">
+  <div class="ticker-label" aria-hidden="true">LIVE</div>
   <div class="ticker-track">
-    <div class="ticker-content" id="ticker-content"></div>
+    <div class="ticker-content" id="ticker-content" aria-live="polite"></div>
   </div>
-  <button class="ticker-dismiss" id="ticker-dismiss" title="Hide ticker">&times;</button>
+  <button class="ticker-dismiss" id="ticker-dismiss" title="Hide ticker" aria-label="Hide news ticker">&times;</button>
 </div>
 
-<div class="tabs" id="main-tabs">
-  <div class="tab active" data-tab="overview">Overview</div>
-  <div class="tab" data-tab="projects">Projects</div>
-  <div class="tab" data-tab="models">Models</div>
-  <div class="tab" data-tab="skills">Skills</div>
-  <div class="tab" data-tab="tools">Tools</div>
-  <div class="tab" data-tab="activity">Activity</div>
+<div class="tabs" id="main-tabs" role="tablist" aria-label="Dashboard sections">
+  <div class="tab active" data-tab="overview" role="tab" tabindex="0" aria-selected="true" aria-controls="panel-overview" id="tab-overview">Overview</div>
+  <div class="tab" data-tab="projects" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-projects" id="tab-projects">Projects</div>
+  <div class="tab" data-tab="models" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-models" id="tab-models">Models</div>
+  <div class="tab" data-tab="skills" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-skills" id="tab-skills">Skills</div>
+  <div class="tab" data-tab="tools" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-tools" id="tab-tools">Tools</div>
+  <div class="tab" data-tab="activity" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-activity" id="tab-activity">Activity</div>
 </div>
 
-<div class="content">
+<div class="content" id="main-content" tabindex="-1">
   <!-- Overview Tab -->
-  <div class="panel active" id="panel-overview">
+  <div class="panel active" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
     <div class="cards" id="overview-cards">
       <div class="card"><h3>Gateway</h3><div class="value" id="ov-gateway"><span class="spinner"></span></div></div>
       <div class="card"><h3>Configuration</h3><div class="value" id="ov-config"><span class="spinner"></span></div></div>
@@ -424,12 +435,12 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
           <button class="btn sm" id="btn-copy-gateway-logs" title="Copy gateway logs to clipboard">Copy</button>
         </span>
       </h3>
-      <div id="ov-logs" style="padding:10px;font-family:var(--mono);font-size:11px;color:var(--text2);max-height:220px;overflow-y:auto;white-space:pre-wrap;">Loading...</div>
+      <div id="ov-logs" role="log" aria-live="polite" aria-label="Recent gateway logs" style="padding:10px;font-family:var(--mono);font-size:11px;color:var(--text2);max-height:220px;overflow-y:auto;white-space:pre-wrap;">Loading...</div>
     </div>
   </div>
 
   <!-- Projects Tab -->
-  <div class="panel" id="panel-projects">
+  <div class="panel" id="panel-projects" role="tabpanel" aria-labelledby="tab-projects">
     <!-- Project List View -->
     <div id="projects-list-view">
       <div class="actions">
@@ -487,7 +498,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
   </div>
 
   <!-- Models Tab -->
-  <div class="panel" id="panel-models">
+  <div class="panel" id="panel-models" role="tabpanel" aria-labelledby="tab-models">
     <div class="cards">
       <div class="card" style="grid-column:span 2">
         <h3>Current Model</h3>
@@ -509,7 +520,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
   </div>
 
   <!-- Skills Tab -->
-  <div class="panel" id="panel-skills">
+  <div class="panel" id="panel-skills" role="tabpanel" aria-labelledby="tab-skills">
     <div class="actions">
       <button class="btn primary" id="btn-refresh-skills">Refresh Skills</button>
     </div>
@@ -549,7 +560,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
   </div>
 
   <!-- Tools Tab -->
-  <div class="panel" id="panel-tools">
+  <div class="panel" id="panel-tools" role="tabpanel" aria-labelledby="tab-tools">
     <div class="table-wrap">
       <h3>CLI Tools</h3>
       <table>
@@ -571,7 +582,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
   </div>
 
   <!-- Activity Log Tab -->
-  <div class="panel" id="panel-activity">
+  <div class="panel" id="panel-activity" role="tabpanel" aria-labelledby="tab-activity">
     <div class="log-filters">
       <input type="search" id="log-search" placeholder="Search logs..." style="min-width:200px">
       <select id="log-type-filter"><option value="">All types</option></select>
@@ -654,13 +665,45 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     tab.addEventListener("click", function() {
       switchTab(tab.dataset.tab);
     });
+    tab.addEventListener("keydown", function(e) {
+      var tabList = Array.from(tabs);
+      var idx = tabList.indexOf(tab);
+      if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+            e.preventDefault();
+            switchTab(tab.dataset.tab);
+          } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        tabList[(idx + 1) % tabList.length].focus();
+        switchTab(tabList[(idx + 1) % tabList.length].dataset.tab);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        tabList[(idx - 1 + tabList.length) % tabList.length].focus();
+        switchTab(tabList[(idx - 1 + tabList.length) % tabList.length].dataset.tab);
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        tabList[0].focus();
+        switchTab(tabList[0].dataset.tab);
+      } else if (e.key === "End") {
+        e.preventDefault();
+        tabList[tabList.length - 1].focus();
+        switchTab(tabList[tabList.length - 1].dataset.tab);
+      }
+    });
   });
 
   function switchTab(name) {
-    tabs.forEach(function(t) { t.classList.remove("active"); });
+    tabs.forEach(function(t) {
+      t.classList.remove("active");
+      t.setAttribute("aria-selected", "false");
+      t.setAttribute("tabindex", "-1");
+    });
     panels.forEach(function(p) { p.classList.remove("active"); });
     var matchTab = document.querySelector('.tab[data-tab="' + name + '"]');
-    if (matchTab) matchTab.classList.add("active");
+    if (matchTab) {
+      matchTab.classList.add("active");
+      matchTab.setAttribute("aria-selected", "true");
+      matchTab.setAttribute("tabindex", "0");
+    }
     var panel = document.getElementById("panel-" + name);
     if (panel) panel.classList.add("active");
     // Reset project detail view when switching to projects

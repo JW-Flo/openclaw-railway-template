@@ -14,9 +14,13 @@
   };
 </script>
 
-<div class="fixed bottom-6 right-6 z-50 flex flex-col gap-2 pointer-events-none">
+<div class="fixed bottom-6 right-6 z-50 flex flex-col gap-2 pointer-events-none" aria-label="Notifications">
   {#each $notifications as toast (toast.id)}
-    <div class="flex items-center gap-3 px-4 py-3 rounded-xl border shadow-lg shadow-black/30 pointer-events-auto toast-enter {typeClasses[toast.type] || typeClasses.info}">
+    <div
+      role={toast.type === 'error' ? 'alert' : 'status'}
+      aria-live={toast.type === 'error' ? 'assertive' : 'polite'}
+      class="flex items-center gap-3 px-4 py-3 rounded-xl border shadow-lg shadow-black/30 pointer-events-auto toast-enter {typeClasses[toast.type] || typeClasses.info}"
+    >
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
         <path stroke-linecap="round" stroke-linejoin="round" d={typeIcons[toast.type] || typeIcons.info} />
       </svg>

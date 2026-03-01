@@ -9,10 +9,6 @@ import httpProxy from "http-proxy";
 import pty from "node-pty";
 import { WebSocketServer } from "ws";
 
-import { BackupManager } from "./lib/backup-manager.js";
-import { CostTracker } from "./lib/cost-tracker.js";
-import { verifyIntegrity } from "./lib/bootstrap-guard.js";
-
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
   process.env.OPENCLAW_STATE_DIR?.trim() ||
@@ -51,14 +47,6 @@ function resolveGatewayToken() {
 
 const OPENCLAW_GATEWAY_TOKEN = resolveGatewayToken();
 process.env.OPENCLAW_GATEWAY_TOKEN = OPENCLAW_GATEWAY_TOKEN;
-
-// ── Backup Manager ──────────────────────────────────────────────────────
-const backupManager = new BackupManager(STATE_DIR, WORKSPACE_DIR);
-
-// ── Cost Tracker ────────────────────────────────────────────────────────
-const costTracker = new CostTracker(STATE_DIR, {
-  alertCallback: (msg) => sendTelegramAlert(`💰 ${msg}`),
-});
 
 function readTaskQueue() {
   const queuePath = path.join(STATE_DIR, "task-queue.json");
@@ -4111,74 +4099,6 @@ app.get("/setup/api/activity", requireSetupAuth, (req, res) => {
   return res.json({ ok: true, entries, typeCounts, total: entries.length });
 });
 
-// ── Log Export / Download ──────────────────────────────────────────────
-app.get("/setup/api/logs/export", requireSetupAuth, async (req, res) => {
-  const format = (req.query?.format || "json").toLowerCase();
-  const include = (req.query?.include || "all").toLowerCase(); // all, gateway, activity, debug
-
-  const sections = {};
-
-  if (include === "all" || include === "debug") {
-    const v = await runCmd(OPENCLAW_NODE, clawArgs(["--version"]));
-    sections.system = {
-      exportedAt: new Date().toISOString(),
-      node: process.version,
-      openclawVersion: v.output.trim(),
-      port: PORT,
-      stateDir: STATE_DIR,
-      workspaceDir: WORKSPACE_DIR,
-      uptime: process.uptime(),
-      memoryMB: Math.round(process.memoryUsage().rss / 1048576),
-      railway: {
-        commit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
-        deploymentId: process.env.RAILWAY_DEPLOYMENT_ID || null,
-        serviceId: process.env.RAILWAY_SERVICE_ID || null,
-        publicDomain: process.env.RAILWAY_PUBLIC_DOMAIN || null,
-      },
-    };
-  }
-
-  if (include === "all" || include === "gateway") {
-    sections.gatewayLogs = gatewayLogs.slice();
-  }
-
-  if (include === "all" || include === "activity") {
-    sections.activityLog = filterActivityLog({ limit: 2000 });
-  }
-
-  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  res.setHeader("Cache-Control", "no-store");
-
-  if (format === "text") {
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="jclaw-logs-${ts}.txt"`);
-    let out = "";
-    if (sections.system) {
-      out += "=== SYSTEM INFO ===\n";
-      for (const [k, v] of Object.entries(sections.system)) {
-        out += `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}\n`;
-      }
-      out += "\n";
-    }
-    if (sections.gatewayLogs) {
-      out += "=== GATEWAY LOGS ===\n";
-      out += sections.gatewayLogs.join("\n") + "\n\n";
-    }
-    if (sections.activityLog) {
-      out += "=== ACTIVITY LOG ===\n";
-      for (const e of sections.activityLog) {
-        out += `[${e.ts}] ${e.type} ${e.user?.username || "system"} ${JSON.stringify(e.detail || {})}\n`;
-      }
-    }
-    return res.send(out);
-  }
-
-  // Default: JSON
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.setHeader("Content-Disposition", `attachment; filename="jclaw-logs-${ts}.json"`);
-  return res.json(sections);
-});
-
 // Alert config management
 app.get("/setup/api/alerts/config", requireSetupAuth, (_req, res) => {
   return res.json({ ok: true, config: readAlertConfig() });
@@ -4939,167 +4859,6 @@ app.post("/setup/api/tokens/revoke", requireSetupAuth, (req, res) => {
   return res.json({ ok: true });
 });
 
-// ── Backup API ──────────────────────────────────────────────────────────
-
-app.get("/setup/api/backups", requireSetupAuth, (_req, res) => {
-  const backups = backupManager.listBackups();
-  return res.json({ ok: true, backups });
-});
-
-app.post("/setup/api/backups", requireSetupAuth, async (_req, res) => {
-  try {
-    const result = await backupManager.createBackup();
-    const s3Config = BackupManager.getS3Config();
-    let s3 = null;
-    if (s3Config) {
-      s3 = await backupManager.uploadToS3(result.name, s3Config);
-    }
-    appendActivity("backup_created", { name: result.name, size: result.size, s3: s3?.uploaded || false });
-    return res.json({ ok: true, name: result.name, size: result.size, s3 });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-app.get("/setup/api/backups/:name", requireSetupAuth, (req, res) => {
-  const name = req.params.name;
-  if (!name.startsWith("backup-") || !name.endsWith(".tar.gz")) {
-    return res.status(400).json({ ok: false, error: "Invalid backup name" });
-  }
-  const filePath = path.join(backupManager.backupDir, name);
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ ok: false, error: "Backup not found" });
-  }
-  res.download(filePath);
-});
-
-app.post("/setup/api/backups/:name/restore", requireSetupAuth, async (req, res) => {
-  const name = req.params.name;
-  if (!name.startsWith("backup-") || !name.endsWith(".tar.gz")) {
-    return res.status(400).json({ ok: false, error: "Invalid backup name" });
-  }
-  try {
-    const result = await backupManager.restoreBackup(name);
-    if (!result.restored) {
-      return res.status(400).json({ ok: false, error: result.errors.join(", ") });
-    }
-    appendActivity("backup_restored", { name });
-    return res.json({ ok: true, message: "Backup restored. Restart gateway to apply." });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// ── Cost Tracking API ───────────────────────────────────────────────────
-
-app.get("/setup/api/costs", requireSetupAuth, (req, res) => {
-  const days = Math.min(Math.max(parseInt(req.query.days || "30", 10), 1), 365);
-  const aggregates = costTracker.getDailyAggregates(days);
-  return res.json({ ok: true, days, aggregates });
-});
-
-app.get("/setup/api/costs/summary", requireSetupAuth, (_req, res) => {
-  const summary = costTracker.getMonthlySummary();
-  return res.json({ ok: true, ...summary });
-});
-
-// ── Security Posture API ────────────────────────────────────────────────
-
-app.get("/setup/api/security-posture", requireSetupAuth, (_req, res) => {
-  const indicators = [];
-
-  // (a) Password strength
-  const pwLen = (SETUP_PASSWORD || "").length;
-  indicators.push({
-    id: "password_strength",
-    label: "Password Strength",
-    status: pwLen >= 16 ? "green" : pwLen >= 12 ? "amber" : "red",
-    detail: `${pwLen} characters`,
-  });
-
-  // (b) Gateway token strength
-  const tokenLen = (OPENCLAW_GATEWAY_TOKEN || "").length;
-  indicators.push({
-    id: "gateway_token",
-    label: "Gateway Token",
-    status: tokenLen >= 64 ? "green" : tokenLen >= 32 ? "amber" : "red",
-    detail: `${tokenLen} characters`,
-  });
-
-  // (c) HTTPS
-  const hasPublicDomain = !!process.env.RAILWAY_PUBLIC_DOMAIN;
-  indicators.push({
-    id: "https",
-    label: "HTTPS",
-    status: hasPublicDomain ? "green" : "amber",
-    detail: hasPublicDomain ? `${process.env.RAILWAY_PUBLIC_DOMAIN}` : "No public domain detected",
-  });
-
-  // (d) Rate limiting — always active
-  indicators.push({
-    id: "rate_limiting",
-    label: "Rate Limiting",
-    status: "green",
-    detail: "Active",
-  });
-
-  // (e) Bootstrap integrity
-  const manifestPath = path.join(STATE_DIR, "bootstrap-manifest.json");
-  let bootstrapStatus;
-  try {
-    const result = verifyIntegrity(WORKSPACE_DIR, manifestPath);
-    bootstrapStatus = result.verified ? "green" : "red";
-    indicators.push({
-      id: "bootstrap_integrity",
-      label: "Bootstrap Integrity",
-      status: bootstrapStatus,
-      detail: result.verified ? "Verified" : `${result.mismatches.length} mismatch(es)`,
-    });
-  } catch {
-    indicators.push({
-      id: "bootstrap_integrity",
-      label: "Bootstrap Integrity",
-      status: "amber",
-      detail: "Could not verify",
-    });
-  }
-
-  // (f) Credential encryption
-  const credEncPath = path.join(STATE_DIR, "credentials.enc");
-  indicators.push({
-    id: "credential_encryption",
-    label: "Credential Encryption",
-    status: fs.existsSync(credEncPath) ? "green" : "amber",
-    detail: fs.existsSync(credEncPath) ? "Encrypted store active" : "No encrypted credentials found",
-  });
-
-  // (g) Alert monitors
-  const alertConfigPath = path.join(STATE_DIR, "alert-config.json");
-  let alertsActive = false;
-  try {
-    const alertConfig = JSON.parse(fs.readFileSync(alertConfigPath, "utf8"));
-    alertsActive = alertConfig.telegram?.enabled || false;
-  } catch { /* no config */ }
-  indicators.push({
-    id: "alert_monitors",
-    label: "Alert Monitors",
-    status: alertsActive ? "green" : "amber",
-    detail: alertsActive ? "Telegram alerts active" : "No alert channels configured",
-  });
-
-  return res.json({ ok: true, indicators });
-});
-
-app.get("/setup/api/bootstrap-status", requireSetupAuth, (_req, res) => {
-  const manifestPath = path.join(STATE_DIR, "bootstrap-manifest.json");
-  try {
-    const result = verifyIntegrity(WORKSPACE_DIR, manifestPath);
-    return res.json({ ok: true, ...result });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
 // ── External API (token-authenticated for local AI builds) ──────────────
 
 function requireApiToken(req, res, next) {
@@ -5513,11 +5272,10 @@ const server = app.listen(PORT, () => {
         console.warn(`[wrapper] doctor --fix failed: ${err.message}`);
       }
       await ensureGatewayRunning();
-      // Start auto-scheduler, model scanner, health monitor, and backup scheduler
+      // Start auto-scheduler, model scanner, and health monitor after gateway is ready
       startScheduler();
       startAutoScanner();
       startHealthMonitor();
-      backupManager.scheduleBackups();
     })().catch((err) => {
       console.error(`[wrapper] failed to start gateway at boot: ${err.message}`);
     });
@@ -5593,18 +5351,6 @@ async function gracefulShutdown(signal) {
   stopScheduler();
   stopAutoScanner();
   stopHealthMonitor();
-  backupManager.stopSchedule();
-
-  // Create a final backup before shutdown
-  try {
-    console.log("[backup] creating shutdown backup...");
-    const result = await backupManager.createBackup();
-    const s3Config = BackupManager.getS3Config();
-    if (s3Config) await backupManager.uploadToS3(result.name, s3Config);
-    console.log(`[backup] shutdown backup created: ${result.name}`);
-  } catch (err) {
-    console.warn(`[backup] shutdown backup failed: ${err.message}`);
-  }
 
   if (setupRateLimiter.cleanupInterval) {
     clearInterval(setupRateLimiter.cleanupInterval);

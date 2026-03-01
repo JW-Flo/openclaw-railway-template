@@ -9,12 +9,20 @@
     blue: 'bg-info',
     purple: 'bg-accent',
   };
+  const statusLabels = {
+    green: 'connected',
+    red: 'disconnected',
+    yellow: 'pending',
+    blue: 'info',
+    purple: 'active',
+  };
 </script>
 
-<span class="inline-flex items-center gap-1.5">
+<span class="inline-flex items-center gap-1.5" aria-label={!label ? (statusLabels[status] || status) : undefined}>
   <span
     class="{sizeMap[size]} {colorMap[status]} rounded-full inline-block flex-shrink-0"
     class:animate-pulse={pulse}
+    aria-hidden="true"
   ></span>
   {#if label}
     <span class="text-sm text-text-2">{label}</span>
