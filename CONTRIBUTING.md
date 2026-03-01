@@ -8,7 +8,7 @@ Thank you for contributing to the OpenClaw Railway Template. This guide covers e
 
 ### Prerequisites
 
-- Node.js ≥ 20
+- Node.js ≥ 24 (enforced by `engines.node` in `package.json`)
 - [pnpm](https://pnpm.io) (`npm install -g pnpm`)
 - Docker (for local container testing)
 - A Railway account (for live deployment testing — optional)
@@ -59,10 +59,10 @@ npm run lint
 
 ## Code Style
 
-- **ESLint**: config in `package.json` (`eslint.config.js` if present). Run `npm run lint` before committing.
-- **Prettier**: format JS/HTML/CSS consistently. Run `npx prettier --write .` to auto-format.
+- **Lint** (current): `npm run lint` runs `node -c src/server.js` — a Node.js syntax check. This is the only automated style check available today.
+- **ESLint + Prettier** **[Sprint 1]**: Full ESLint config and Prettier will be added by the QA sprint. Once landed, `npm run lint` will enforce ESLint rules including a `no-child-process` custom rule.
 - **No TypeScript** in the wrapper (vanilla JS); the SvelteKit dashboard (`dashboard/`) uses TypeScript.
-- **No `child_process` imports directly**: all process spawning goes through `src/lib/safe-exec.js` (`safeSpawn()`). ESLint rule enforces this.
+- **No `child_process` imports directly** **[Sprint 1]**: once `src/lib/safe-exec.js` lands, all process spawning goes through `safeSpawn()` and ESLint enforces the constraint. Until then, manually follow this convention in any new code.
 
 ---
 
@@ -71,7 +71,7 @@ npm run lint
 **Current** (before Sprint 1 lands): only a syntax check is available:
 
 ```bash
-npm run lint     # ESLint / node -c syntax check — the only automated check today
+npm run lint     # node -c syntax check — the only automated check today
 ```
 
 **After Sprint 1** (adds Vitest + `pnpm test` scripts): [Vitest](https://vitest.dev) will be the test runner.

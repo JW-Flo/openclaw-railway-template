@@ -27,12 +27,13 @@ The post-hardening security model layers multiple defenses across the request pa
 
 ### Rate Limiting Tiers
 
-| Endpoint group | Limit | Window |
-|---|---|---|
-| `/setup/api/shell` (shell execution) | 10 req / IP | 1 min |
-| `/setup/api/openclaw-cmd` (agent/chat) | 30 req / IP | 1 min |
-| All other `/setup/api/*` | 20 req / IP | 1 min |
-| `/setup/api/login` (login attempts) | 5 req / IP | 15 min |
+| Endpoint group | Limit | Window | Status |
+|---|---|---|---|
+| `/setup/api/shell` (shell execution) | 10 req / IP | 1 min | **Live** (`shellRateLimiter`) |
+| `/setup/api/openclaw-cmd` (agent/chat) | 30 req / IP | 1 min | **Live** (`chatRateLimiter`) |
+| External `/api/v1/*` | 20 req / token | 1 min | **Live** (`apiRateLimiter`) |
+| `/setup/api/*` (Basic auth gate) | 50 req / IP | 1 min | **Live** (`setupRateLimiter`) |
+| `/setup/api/login` (session login) | 5 req / IP | 15 min | **[Sprint 1]** — added with session auth |
 
 Rate-limit responses include `Retry-After` header. Exceeding the login limit triggers a `[AUTH ALERT]` via the alert system (see [Alert Monitoring](#alert-monitoring) below).
 
@@ -92,7 +93,7 @@ The wrapper includes a built-in security alert system that sends notifications t
 
 **Setup**: Set `ALERTS_CHAT_ID` (Telegram) or `ALERTS_CHANNEL_ID` (Discord/Slack) in Railway Variables. Alerts fall back to stdout with `[SECURITY-ALERT]` prefix if no channel is configured.
 
-**Verify**: `GET /setup/api/security-posture` returns the current alert configuration and monitor health.
+**Verify** (Sprint 1): `GET /setup/api/security-posture` will return the current alert configuration and monitor health once the alerts module lands. Until then, check Railway stdout logs for `[SECURITY-ALERT]` lines or confirm your bot channel is receiving test messages.
 
 ---
 
@@ -101,7 +102,7 @@ The wrapper includes a built-in security alert system that sends notifications t
 If you discover a security vulnerability in this template:
 
 1. **Do not open a public GitHub issue.**
-2. Email: `security@jclaw.dev` _(placeholder — replace with real contact)_
+2. Email: _(fill in your contact address before deploying — open a GitHub issue to request the disclosure address if you are deploying a fork)_
 3. Include: affected component, reproduction steps, potential impact.
 4. **Response SLA**: Acknowledgement within 72 hours; fix or mitigation plan within 14 days for Critical/High.
 5. **Responsible disclosure**: We ask for a 90-day embargo before public disclosure, allowing time for a fix and coordinated release.
@@ -115,9 +116,9 @@ Complete this checklist on every fresh deployment:
 - [ ] **`SETUP_PASSWORD` is ≥ 16 characters** and randomly generated (not `test`, `password`, or derived from a username). The local testing default of `test` must never be used in production.
 - [ ] **Railway Volume is mounted at `/data`** — verify via `GET /setup/api/railway/volume`.
 - [ ] **Review workspace templates** in `/data/workspace/` on first deploy — confirm no unexpected files were added before you ran setup.
-- [ ] **Set `ALERTS_CHAT_ID`** (or `ALERTS_CHANNEL_ID`) so security alerts are delivered to your bot channel. Verify with `GET /setup/api/security-posture`.
-- [ ] **Check bootstrap integrity** — `GET /setup/api/bootstrap-status` should return `{ "status": "verified" }`. If it returns `tampered`, stop and investigate before proceeding.
-- [ ] **Verify security posture** — `GET /setup/api/security-posture` should show all monitors active and no critical findings.
+- [ ] **Set `ALERTS_CHAT_ID`** (or `ALERTS_CHANNEL_ID`) so security alerts are delivered to your bot channel. Verify by checking Railway logs for `[SECURITY-ALERT]` lines (Sprint 1 adds a dedicated `/setup/api/security-posture` endpoint).
+- [ ] **Check bootstrap integrity** — **[Sprint 1]** `GET /setup/api/bootstrap-status` should return `{ "status": "verified" }`. Until Sprint 1 lands, manually review `/data/workspace/bootstrap.sh` via `GET /setup/api/workspace/read?path=bootstrap.sh`.
+- [ ] **Verify system health** — `GET /setup/healthz` should show `ready:true`; `GET /setup/api/debug` for detailed state. (A dedicated `/setup/api/security-posture` endpoint is planned for Sprint 1.)
 - [ ] **Upgrade to Railway Pro plan** (minimum 1 GB RAM) — the Hobby plan (512 MB) is below the ~550 MB minimum required by the OpenClaw gateway and will cause OOM crashes under load.
 - [ ] **Rotate `OPENCLAW_GATEWAY_TOKEN`** after any suspected compromise — delete `${STATE_DIR}/gateway.token` and restart.
 

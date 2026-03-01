@@ -9,7 +9,7 @@
 
 ```bash
 AUTH=$(echo -n ":${SETUP_PASSWORD}" | base64)
-BASE="https://openclaw-production-4e3d.up.railway.app"
+BASE="https://YOUR_SERVICE.up.railway.app"   # replace with your Railway public URL
 curl -s -H "Authorization: Basic $AUTH" $BASE/ENDPOINT
 ```
 
@@ -19,19 +19,22 @@ curl -s -H "Authorization: Basic $AUTH" $BASE/ENDPOINT
 
 ### 1. Dashboard shows "Disconnected"
 
-**Most likely cause**: Control UI opened directly (bookmarked URL) without going through `/setup` first — the session cookie / gateway token was never injected.
+**Most likely cause**: The Control UI was opened at `/openclaw?_boot=1` directly (a bookmark or shared link) — skipping the bootstrap page that injects the gateway token into `localStorage`. The Control UI reads auth exclusively from `localStorage["openclaw.control.settings.v1"]`, so without the token, all WebSocket/HTTP calls are rejected.
 
 **Fix in 30 seconds**:
-1. Navigate to `https://…/setup` (Basic auth prompt)
-2. Enter any username + your `SETUP_PASSWORD`
-3. Click **Open UI** on the setup page
-4. The UI now shows "Connected"
+1. Navigate to `https://YOUR_SERVICE.up.railway.app/openclaw` (**without** `?_boot=1`)
+2. The wrapper serves a bootstrap page that writes the gateway token to `localStorage`
+3. You are automatically redirected to `/openclaw?_boot=1` — the UI should now show "Connected"
+
+If that still fails:
+1. Navigate to `/setup` (Basic auth prompt), enter your `SETUP_PASSWORD`
+2. Click **Open UI** from the setup page (same bootstrap flow)
 
 **Verify it's really a gateway problem** (not just missing auth):
 ```bash
 curl -s $BASE/setup/healthz
-# If gateway:"running",ready:true → it's auth, not gateway. Use fix above.
-# If ready:false → gateway is down. See issue #3.
+# gateway:"running",ready:true → it's auth context, not gateway. Use fix above.
+# ready:false → gateway is down. See issue #3.
 ```
 
 See also: CLAUDE.md → "Dashboard shows Disconnected" runbook.
@@ -44,20 +47,22 @@ See also: CLAUDE.md → "Dashboard shows Disconnected" runbook.
 
 **Fix**:
 ```bash
-# List tasks and find the stuck one
-curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
-  $BASE/setup/api/openclaw-cmd -d '{"args":["runner","list","--json"]}'
+# List current task queue
+curl -s -H "Authorization: Basic $AUTH" $BASE/setup/api/runner/queue
 
-# Reset it (replace TASK_ID)
+# Remove the stuck task (replace TASK_ID from the queue list)
 curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
-  $BASE/setup/api/openclaw-cmd -d '{"args":["runner","reset","TASK_ID"]}'
+  $BASE/setup/api/runner/remove -d '{"id":"TASK_ID"}'
+
+# Check runner status
+curl -s -H "Authorization: Basic $AUTH" $BASE/setup/api/runner/status
 ```
 
-If `runner reset` is unavailable, manually patch the queue file:
+If the remove API is not enough and you need to force-reset `running → queued`, patch the queue file directly (task queue is `task-queue.json` on the volume):
 ```bash
 curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
   $BASE/setup/api/shell \
-  -d '{"command":"python3 -c \"import json; q=json.load(open(\\\"/data/.openclaw/runner-queue.json\\\")); [t.update({\\\"status\\\":\\\"queued\\\"}) for t in q if t[\\\"id\\\"]==\\\"TASK_ID\\\" and t[\\\"status\\\"]==\\\"running\\\"]; json.dump(q,open(\\\"/data/.openclaw/runner-queue.json\\\",\\\"w\\\"),indent=2); print(\\\"done\\\")\""}'
+  -d '{"command":"python3 -c \"import json; q=json.load(open(\\\"/data/.openclaw/task-queue.json\\\")); [t.update({\\\"status\\\":\\\"queued\\\"}) for t in q if t[\\\"id\\\"]==\\\"TASK_ID\\\" and t[\\\"status\\\"]==\\\"running\\\"]; json.dump(q,open(\\\"/data/.openclaw/task-queue.json\\\",\\\"w\\\"),indent=2); print(\\\"done\\\")\""}'
 ```
 
 See also: CLAUDE.md → "Runner task stuck in running" runbook.
@@ -175,12 +180,20 @@ curl -s -H "Authorization: Basic $AUTH" "$BASE/setup/api/railway/logs?type=runti
 curl -s -H "Authorization: Basic $AUTH" "$BASE/setup/api/railway/logs?type=build"
 ```
 
-### Security posture
+### System status and debug
 
 ```bash
-curl -s -H "Authorization: Basic $AUTH" $BASE/setup/api/security-posture
-# Returns: { monitors: {...}, alerts_configured: true/false, rate_limiting: true, csrf: true, ... }
+# Debug dump: gateway config, logs, system state
+curl -s -H "Authorization: Basic $AUTH" $BASE/setup/api/debug | python3 -m json.tool
+
+# Detailed gateway health
+curl -s $BASE/setup/healthz | python3 -m json.tool
+
+# Current AI model
+curl -s -H "Authorization: Basic $AUTH" $BASE/setup/api/models/current
 ```
+
+> **Note**: A dedicated `/setup/api/security-posture` endpoint is planned for Sprint 1. Until then, use `/setup/api/debug` for system state and Railway logs for security events.
 
 ---
 
