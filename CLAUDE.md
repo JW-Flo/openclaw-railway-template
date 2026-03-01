@@ -505,3 +505,79 @@ echo -e "\n=== Credentials ===" && curl -s -X POST -H "Authorization: Basic $AUT
 18. **External API tokens** → API tokens created via `/setup/api/tokens/create` use `jclaw_` prefix and Bearer auth. Tokens are stored in `${STATE_DIR}/api-tokens.json`. External endpoints are at `/api/v1/*` (health, status, agent/message, tasks/add, tasks).
 19. **Railway API endpoints** → All Railway infrastructure management (metrics, deployments, logs, volumes, backups, env vars) is now available via `/setup/api/railway/*` endpoints. No need for raw GraphQL calls. Requires `RAILWAY_ACCOUNT_TOKEN` env var.
 20. **Railway Agent Skills** → The `railway-ops` workspace skill teaches the OpenClaw agent how to use the Railway API endpoints for infrastructure management. Auto-bootstrapped on first boot from `workspace-templates/skills/railway-ops/`.
+21. **"Gateway disconnected" is usually auth, not gateway** → Most "gateway down" reports are actually missing session/token context. The user opened the Control UI directly without going through `/setup` first. Fix: navigate to `/setup` and open the UI from there — the setup page injects the required auth token via the bootstrap page.
+22. **Dashboard 401s from auth realm mismatch** → Dashboard API endpoints may reject session-cookie-authenticated users if they only check Basic auth. Any new endpoint serving the dashboard UI must accept session cookie, bearer token, AND Basic auth as fallback.
+23. **Runner task queue is JSON-backed on /data** → Non-atomic writes can corrupt the queue under concurrent access. Always write to a temp file, fsync, then rename. Treat "run task" as a compare-and-swap on status (`queued` → `running`) to prevent double-execution from concurrent requests.
+24. **Gateway boot race** → Immediately after a deploy/restart, the dashboard may show 502/timeouts until the gateway health check passes. The wrapper polls for readiness — correlate wrapper logs (first successful `/healthz`) to confirm the gateway is truly ready before investigating further.
+
+## Known Failure Patterns & Runbook
+
+### "Dashboard shows Disconnected"
+
+1. Check if the user accessed the UI directly (not via `/setup`) → missing token/cookie context
+2. Check `GET /setup/healthz` — if gateway is running, it's an auth issue
+3. Check `GET /healthz` — if wrapper is healthy but gateway unreachable, wait for boot
+4. Fix: navigate to `/setup`, use "Open UI" action, which injects auth context
+
+### "Runner task stuck in running"
+
+1. Check if the gateway restarted mid-task (logs: `[gateway] starting with command`)
+2. Check for concurrent run requests that bypassed the status guard
+3. Fix: manually set task status back to `queued` or `failed` via the runner API/JSON file
+
+### "Gateway unreachable after deploy"
+
+1. Check deployment status: `GET /setup/api/railway/deployments?limit=3`
+2. Check runtime logs: `GET /setup/api/railway/logs?type=runtime&limit=200`
+3. Check if `openclaw.json` exists and is valid
+4. Check if gateway port (18789) is binding correctly in logs
+5. If all else fails: `POST /setup/api/restart-gateway`
+
+### Auth failure classification
+
+When debugging auth issues, distinguish between these error states:
+- **401 `auth_missing`**: No credentials provided — user needs to authenticate
+- **403 `auth_forbidden`**: Credentials present but insufficient — wrong role/scope
+- **503 `gateway_unreachable`**: Auth is fine but gateway not responding — wait or restart
+- **409 `runner_busy`**: Auth is fine, gateway is fine, but runner is occupied
+
+## Tool Design Principles
+
+Lessons from building Claude Code that apply to this project's tool/skill design:
+
+1. **Shape tools to model capabilities** — Give the agent tools that match what it's good at. A general-purpose `shell` command is powerful but requires the model to know CLI syntax. Wrapper API endpoints (like `/setup/api/railway/metrics`) are higher-level tools that reduce the chance of errors.
+
+2. **Progressive disclosure over context stuffing** — Don't put everything in the system prompt. Use skills (SKILL.md files) as progressive disclosure: the agent discovers capabilities by reading skill files, which reference other files. This keeps the base prompt lean and lets the agent build context as needed.
+
+3. **Structured outputs for elicitation** — When the agent needs user input, structured tool calls (with predefined options) work better than free-text questions. The wrapper's dashboard forms and API responses follow this pattern.
+
+4. **Revisit tools as models improve** — Tools that were necessary for earlier models may become constraining. The workspace templates should evolve: if the agent gets better at shell commands, some wrapper API endpoints may become unnecessary. If it gets better at context-building, reduce prescriptive instructions.
+
+5. **Search capabilities compound** — The agent's ability to build its own context improves dramatically with good search tools. The wrapper's `workspace/ls`, `workspace/read`, and `shell` API give the OpenClaw agent grep/find capabilities across the workspace. Skills can reference other files, enabling nested context discovery.
+
+6. **Keep the tool count small** — Every new tool is one more option the model has to evaluate. Before adding a new wrapper API endpoint, consider whether an existing tool (like `shell` or `openclaw-cmd`) already covers the use case.
+
+## Cross-Project Failure Patterns
+
+Common failure modes across the managed project fleet (from operational experience):
+
+### Auth/Session Boundary Failures (all projects)
+- UI calls API without required auth headers → 401
+- Session cookie vs bearer token vs Basic auth precedence mismatches
+- Fix: one canonical auth gate per project that accepts all valid credential types
+
+### Automation Feedback Loops (Project-AtlasIT)
+- Workflows that commit artifacts must NOT trigger on `push: [main]`
+- Evidence-generating workflows should use `workflow_dispatch` or PR-only contexts
+- Add CI linter: fail if a workflow has both `push: [main]` and `git commit` + `git push` steps
+
+### Health Check Misrouting (AWhittleWandering)
+- Cloudflare `workers_dev = false` can disable the expected probe URL
+- CI health checks should compute URLs from wrangler output, not use static strings
+- Split health checks by failure class: DNS/route disabled vs auth failure vs service unhealthy
+
+### Trading System Safety (market_agents)
+- Error counters must be deterministic: store `consecutiveErrors` + `lastErrorAt`, reset only on full cycle success
+- All external API calls need timeouts + jittered retries
+- Audit log on every side-effecting step (order placement, cancel, credential change)
+- Treat any change to safety invariants (kill switch, max position, daily loss limit) as merge-blocking

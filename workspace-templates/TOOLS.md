@@ -101,3 +101,23 @@ wrangler deploy
 ```bash
 railway up
 ```
+
+## Tool Design Guidance
+
+When extending agent capabilities (adding skills, scripts, or API endpoints):
+
+1. **Prefer higher-level tools** — A dedicated API endpoint like `/setup/api/railway/metrics` is better than raw `curl` + GraphQL. It reduces query errors and returns clean JSON.
+2. **Keep the tool count small** — Every new tool/skill is one more option to evaluate. Before adding, check if an existing tool already covers the use case.
+3. **Use progressive disclosure** — Don't put all instructions in the system prompt. Put specialized knowledge in SKILL.md files that the agent reads on demand. Skills can reference other files for deeper context.
+4. **Classify errors precisely** — When a tool fails, return structured error codes (`auth_missing`, `gateway_unreachable`, `runner_busy`) rather than generic messages. This lets the agent route to the correct fix.
+5. **Split health checks by failure class** — DNS/route failures, auth failures, and service health failures have different fixes. One monolithic health check hides the root cause.
+
+## Troubleshooting Quick Reference
+
+| Symptom | Likely Cause | Fix |
+|---------|-------------|-----|
+| "Gateway disconnected" in UI | Missing auth token (opened UI directly) | Open via `/setup` → "Open UI" |
+| Dashboard shows empty/401 | Auth realm mismatch (Basic vs cookie) | Check endpoint auth middleware |
+| Runner task stuck "running" | Gateway restarted mid-task or concurrent run | Reset task status via API |
+| 502 after deploy | Gateway still booting | Wait 30s, check `/setup/healthz` |
+| Railway API schema error | GraphQL field changed upstream | Check `/setup/api/railway/*` wrappers |
