@@ -1,0 +1,56 @@
+OPUS-04: Growth Unlock Implementations
+JClaw / OpenClaw Railway Template QA Remediation
+MODEL: Claude Opus | Est: 50-60 min | Sprint 2
+Trigger: "Execute opus-04 growth unlocks"
+Sprint 2 — runs after ALL Sprint 1 PRs merged (Opus-01, -02, -03, Sonnet-01)
+Context
+Sprint 1 delivered: security hardening (safe-exec, CSRF, session auth, credential encryption, bootstrap), alert
+monitoring (5 monitors per SECURITY_ALERTS_PLAN), test framework (vitest, CI, ESLint), docs. Sprint 2 builds
+growth features on the hardened foundation. server.js is safe to modify again (no concurrent sessions in Sprint 2).
+Build on existing capabilities: Svelte dashboard already has models, skills, sessions, runner, cron, projects, reports,
+settings, overview pages. Task queue with runner exists. Model pool with triage/selection exists. User quota system
+exists. Alert notifier (src/alerts/notifier.js) available for budget alerts.
+Task 1: Automated Backup System
+Create src/lib/backup-manager.js. createBackup(): tar.gz /data/.openclaw + /data/workspace into
+/data/backups/backup-{ISO}.tar.gz. Embed SHA-256 manifest. Keep last 10 local (delete oldest).
+restoreBackup(name): extract, verify manifest integrity before overwriting. scheduleBackups(): setInterval per
+BACKUP_INTERVAL_MINUTES env (default 60). Wire graceful shutdown hook: import in server.js SIGTERM handler,
+call createBackup() before gateway shutdown. S3/R2: if BACKUP_S3_BUCKET + BACKUP_S3_KEY +
+BACKUP_S3_SECRET set, pnpm add @aws-sdk/client-s3, upload after local backup. Keep 30 remote. API routes in
+server.js: GET /setup/api/backups (list), POST /setup/api/backups (trigger manual), GET /setup/api/backups/:name
+(download), POST /setup/api/backups/:name/restore. Write tests: test/lib/backup-manager.test.js (create, restore,
+rotation, manifest verification).
+AC: Backup on schedule + SIGTERM. Local retention 10. Corrupted archive rejected.
+Task 2: Cost Dashboard & Budget Alerts
+Create src/lib/cost-tracker.js. The existing model pool (server.js line 84+) already tracks triage and model
+selection. Add proxy response interceptor middleware: inspect response headers from gateway for token counts
+(anthropic-ratelimit-*, x-ratelimit-*). Parse response body for usage.input_tokens/output_tokens (stream-safe: pipe
+through transform, parse JSON chunks, re-pipe — do NOT buffer entire response). Append to
+/data/.openclaw/cost-log.jsonl: {date, provider, model, input_tokens, output_tokens, est_cost_usd}. Hardcode pricing
+for current models (claude-sonnet-4-20250514, gpt-4o, gpt-4o-mini, etc). API: GET /setup/api/costs?days=30 returns
+daily aggregates. GET /setup/api/costs/summary for month total. Budget alerts: use src/alerts/notifier.js sendAlert()
+when monthly total exceeds BUDGET_ALERT_USD. Also POST to BUDGET_ALERT_WEBHOOK if configured.
+Debounce 1 check/min. Add Svelte dashboard page: dashboard/src/routes/costs/+page.svelte with chart of daily
+spend.
+AC: Cost log populated on LLM usage. Budget alert fires. Dashboard page renders.
+Task 3: Security Posture Dashboard
+Add Svelte page: dashboard/src/routes/security/+page.svelte. Displays 7 indicators (green/amber/red):
+(a) Password strength: red <12 chars, amber <16, green 16+. (b) Gateway token: red <32 chars, green 64+. (c)
+HTTPS: green if RAILWAY_PUBLIC_DOMAIN set. (d) Rate limiting: green (always active). (e) Bootstrap integrity:
+query /setup/api/bootstrap-status — green if verified, red if mismatches. (f) Credential encryption: green if
+credentials.enc exists. (g) Alert monitors: green if ALERTS_ENABLED and monitors running. API endpoint: GET
+/setup/api/security-posture returning all 7 values. Auto-refresh 30s using existing health store pattern
+(dashboard/src/lib/stores/health.js).
+AC: /security dashboard shows 7 indicators. Weak password shows red.
+Task 4: Enhanced Workspace Skills
+Repo already has 5 custom skills in workspace-templates/skills/. Add 3 new: (a)
+workspace-templates/skills/security-ops/SKILL.md — teaches agent to check bootstrap integrity, review
+alert history, run security posture check via API. (b) workspace-templates/skills/backup-ops/SKILL.md —
+teaches agent to trigger backups, list, restore, check S3 status via API. (c)
+workspace-templates/skills/cost-ops/SKILL.md — teaches agent to check cost summary, review budget
+alerts, suggest model tier changes based on usage. Follow the same SKILL.md format as existing skills (railway-ops,
+project-ops, etc).
+AC: 3 new skills auto-bootstrap on fresh deploy via entrypoint.sh.
+Commit: feat(growth): [scope] [session-url]. PR: 'feat(growth): backup system, cost dashboard, security posture,
+workspace skills'. Copilot.
+JClaw QA — Opus 04 of 05 | Sprint 2
