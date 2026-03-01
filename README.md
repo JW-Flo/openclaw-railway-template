@@ -1,3 +1,4 @@
+[![CI](https://github.com/JW-Flo/openclaw-railway-template/actions/workflows/ci.yml/badge.svg)](https://github.com/JW-Flo/openclaw-railway-template/actions/workflows/ci.yml)
 # OpenClaw Railway Template (1‑click deploy)
 
 This repo packages **OpenClaw** for Railway with a small **/setup** web wizard so users can deploy and onboard **without running any commands**.

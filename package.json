@@ -8,7 +8,12 @@
   "scripts": {
     "dev": "node src/server.js",
     "start": "node src/server.js",
-    "lint": "node -c src/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src/lib/ src/middleware/ test/",
+    "lint:fix": "eslint --fix src/lib/ src/middleware/ test/",
+    "lint:syntax": "node -c src/server.js",
     "build:dashboard": "cd dashboard && npm run build"
   },
   "dependencies": {
@@ -18,6 +23,17 @@
     "ws": "^8.18.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["node-pty"]
+    "onlyBuiltDependencies": [
+      "node-pty"
+    ]
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@vitest/coverage-v8": "^4.0.18",
+    "eslint": "^10.0.2",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.8.1",
+    "supertest": "^7.2.2",
+    "vitest": "^4.0.18"
   }
 }
