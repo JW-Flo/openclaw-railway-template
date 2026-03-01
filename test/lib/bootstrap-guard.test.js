@@ -109,6 +109,18 @@ describe('bootstrap-guard', () => {
     expect(result.mismatches[0].file).toBe('(manifest)');
   });
 
+  it('verifyIntegrity detects new untracked files', () => {
+    writeFileSync(join(workspaceDir, 'SOUL.md'), '# Soul');
+    rebaseline(workspaceDir, manifestPath);
+
+    // Add a new file after baselining
+    writeFileSync(join(workspaceDir, 'EVIL.md'), '# Injected');
+
+    const result = verifyIntegrity(workspaceDir, manifestPath);
+    expect(result.verified).toBe(false);
+    expect(result.mismatches.some((m) => m.file === 'EVIL.md' && m.actual === 'added')).toBe(true);
+  });
+
   it('rebaseline updates manifest correctly', () => {
     writeFileSync(join(workspaceDir, 'A.md'), 'v1');
     rebaseline(workspaceDir, manifestPath);

@@ -26,10 +26,24 @@ export function csrfProtection(options = {}) {
   const exemptMethods = new Set(options.exemptMethods || ['GET', 'HEAD', 'OPTIONS']);
 
   return (req, res, next) => {
+    // Parse cookies from header if req.cookies is not populated
+    if (!req.cookies) {
+      req.cookies = {};
+      const cookieHeader = req.headers.cookie || '';
+      for (const pair of cookieHeader.split(';')) {
+        const idx = pair.indexOf('=');
+        if (idx > 0) {
+          const key = pair.slice(0, idx).trim();
+          const val = pair.slice(idx + 1).trim();
+          req.cookies[key] = val;
+        }
+      }
+    }
+
     // Skip exempt methods
     if (exemptMethods.has(req.method)) {
       // Ensure a CSRF cookie exists for subsequent mutation requests
-      if (!req.cookies?.[COOKIE_NAME]) {
+      if (!req.cookies[COOKIE_NAME]) {
         const token = generateToken();
         res.cookie(COOKIE_NAME, token, {
           httpOnly: false, // JS needs to read it
@@ -55,10 +69,11 @@ export function csrfProtection(options = {}) {
     }
 
     // Validate: cookie token must match header token
-    const cookieToken = req.cookies?.[COOKIE_NAME];
-    const headerToken = req.headers[HEADER_NAME];
+    const cookieToken = req.cookies[COOKIE_NAME];
+    const rawHeaderToken = req.headers[HEADER_NAME];
+    const headerToken = Array.isArray(rawHeaderToken) ? rawHeaderToken[0] : rawHeaderToken;
 
-    if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+    if (!cookieToken || typeof headerToken !== 'string' || cookieToken !== headerToken) {
       return res.status(403).json({ error: 'csrf_invalid', message: 'CSRF token missing or invalid' });
     }
 

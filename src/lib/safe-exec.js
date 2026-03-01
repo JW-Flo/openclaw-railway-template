@@ -11,13 +11,14 @@ const DANGEROUS_ARG_PATTERN = /[;|&$`\\]/;
 
 /**
  * Validates that a command is in the allowlist.
+ * Rejects commands with path separators to prevent path-traversal bypass.
  * @param {string} cmd
  * @returns {boolean}
  */
 export function isCommandAllowed(cmd) {
   if (!cmd || typeof cmd !== 'string') return false;
-  const base = cmd.split('/').pop();
-  return ALLOWED_COMMANDS.has(base);
+  if (cmd.includes('/')) return false;
+  return ALLOWED_COMMANDS.has(cmd);
 }
 
 /**
@@ -40,7 +41,7 @@ export function validateArgs(args) {
       return { valid: false, reason: 'arg exceeds max length (8192)' };
     }
     if (DANGEROUS_ARG_PATTERN.test(arg)) {
-      return { valid: false, reason: `arg contains disallowed character: ${arg}` };
+      return { valid: false, reason: 'arg contains disallowed shell metacharacter' };
     }
   }
   return { valid: true };

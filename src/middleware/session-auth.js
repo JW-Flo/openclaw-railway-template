@@ -74,9 +74,12 @@ export function requireSessionOrBasic(setupPassword) {
     const authHeader = req.headers.authorization || '';
     if (authHeader.startsWith('Basic ')) {
       const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
-      const [, password] = decoded.split(':');
-      if (password && safeCompare(password, setupPassword)) {
-        return next();
+      const separatorIndex = decoded.indexOf(':');
+      if (separatorIndex !== -1) {
+        const password = decoded.slice(separatorIndex + 1);
+        if (password && safeCompare(password, setupPassword)) {
+          return next();
+        }
       }
     }
 

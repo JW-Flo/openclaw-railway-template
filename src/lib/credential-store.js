@@ -38,9 +38,9 @@ export class CredentialStore {
     if (existsSync(this.#saltPath)) {
       return readFileSync(this.#saltPath);
     }
-    mkdirSync(this.#storeDir, { recursive: true });
+    mkdirSync(this.#storeDir, { recursive: true, mode: 0o700 });
     const salt = randomBytes(SALT_LENGTH);
-    writeFileSync(this.#saltPath, salt);
+    writeFileSync(this.#saltPath, salt, { mode: 0o600 });
     return salt;
   }
 
@@ -85,9 +85,9 @@ export class CredentialStore {
     const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
     const authTag = cipher.getAuthTag();
 
-    mkdirSync(this.#storeDir, { recursive: true });
+    mkdirSync(this.#storeDir, { recursive: true, mode: 0o700 });
     const blob = Buffer.concat([iv, authTag, ciphertext]);
-    writeFileSync(this.#blobPath, blob);
+    writeFileSync(this.#blobPath, blob, { mode: 0o600 });
   }
 
   /**

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, dirname, relative } from 'node:path';
 
 /**
  * Compute SHA-256 hash of a file.
@@ -56,7 +56,7 @@ export function computeManifest(workspaceDir) {
  * @param {Record<string, string>} manifest
  */
 export function saveManifest(manifestPath, manifest) {
-  mkdirSync(join(manifestPath, '..'), { recursive: true });
+  mkdirSync(dirname(manifestPath), { recursive: true });
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 }
 
@@ -89,10 +89,18 @@ export function verifyIntegrity(workspaceDir, manifestPath) {
   const current = computeManifest(workspaceDir);
   const mismatches = [];
 
+  // Check saved files for changes or deletions
   for (const [file, expectedHash] of Object.entries(saved)) {
     const actualHash = current[file];
     if (actualHash !== expectedHash) {
       mismatches.push({ file, expected: expectedHash, actual: actualHash || 'deleted' });
+    }
+  }
+
+  // Detect new files not in the original manifest
+  for (const file of Object.keys(current)) {
+    if (!(file in saved)) {
+      mismatches.push({ file, expected: 'absent', actual: 'added' });
     }
   }
 

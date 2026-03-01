@@ -38,10 +38,10 @@ describe('safe-exec', () => {
       expect(isCommandAllowed(undefined)).toBe(false);
     });
 
-    it('extracts basename from full path', () => {
-      expect(isCommandAllowed('/usr/bin/git')).toBe(true);
-      expect(isCommandAllowed('/usr/local/bin/node')).toBe(true);
-      expect(isCommandAllowed('/bin/rm')).toBe(false);
+    it('rejects commands with path separators to prevent path-traversal', () => {
+      expect(isCommandAllowed('/usr/bin/git')).toBe(false);
+      expect(isCommandAllowed('/tmp/node')).toBe(false);
+      expect(isCommandAllowed('../evil/git')).toBe(false);
     });
   });
 
@@ -54,7 +54,7 @@ describe('safe-exec', () => {
     it('rejects args with semicolons', () => {
       const result = validateArgs(['--flag; rm -rf /']);
       expect(result.valid).toBe(false);
-      expect(result.reason).toContain('disallowed character');
+      expect(result.reason).toContain('disallowed shell metacharacter');
     });
 
     it('rejects args with pipe', () => {
