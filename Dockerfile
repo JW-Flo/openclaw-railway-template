@@ -12,6 +12,7 @@ RUN apt-get update \
     build-essential \
     jq \
     ffmpeg \
+    netcat-openbsd \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies for skills (e.g. web-search uses duckduckgo-search)
