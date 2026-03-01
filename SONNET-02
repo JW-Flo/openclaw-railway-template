@@ -1,0 +1,40 @@
+SONNET-02: Dashboard UX & Accessibility
+JClaw / OpenClaw Railway Template QA Remediation
+MODEL: Claude Sonnet | Est: 25-35 min | Sprint 2
+Trigger: "Execute sonnet-02 dashboard UX"
+Sprint 2. Can run concurrent with Opus-04 IF Opus-04 creates /security and /costs pages first, OR run after
+Opus-04 to polish those pages too.
+Scope
+Improve the Svelte dashboard and static HTML pages for accessibility, mobile responsiveness, UX polish. Dashboard:
+dashboard/ (SvelteKit with existing components in dashboard/src/lib/components/shared/). Static pages: src/public/
+(setup.html, login.html, loading.html, tui.html, dashboard.html). This prompt focuses on the existing pages and shared
+components — NOT creating new pages.
+Task 1: Accessibility — Static Pages
+For each file in src/public/ (setup.html, login.html, loading.html, tui.html, dashboard.html): Add lang='en' to html tag.
+Viewport meta if missing. ARIA labels on all form inputs, buttons, links. aria-live='polite' on dynamic status areas
+(gateway status, setup progress). Keyboard navigation: tabindex, visible focus styles, skip-to-content link. Color
+contrast WCAG 2.1 AA (4.5:1 text, 3:1 large). Alt text on images. aria-hidden on decorative elements.
+AC: All form inputs labeled. Tab navigation works through every page.
+Task 2: Accessibility — Svelte Shared Components
+Audit dashboard/src/lib/components/shared/ (Card, Button, Modal, DataTable, Toast, Badge, StatusDot, Spinner,
+CodeOutput, Chart). For each: Modal.svelte: focus trap (Tab cycles within modal), Escape closes, aria-modal='true'.
+DataTable.svelte: proper semantics (thead/tbody, th scope='col'). Toast.svelte: aria-live='assertive' for errors, 'polite' for
+info. StatusDot.svelte: aria-label with status text ('connected', 'disconnected'). Button.svelte: disabled state
+communicated via aria-disabled. Spinner.svelte: role='status' with aria-label.
+AC: Modal traps focus. DataTable semantically correct. Toasts announced by screen reader.
+Task 3: Mobile Responsive
+Static pages: API key inputs word-break:break-all, font-size:16px (prevents iOS zoom). Full-width on screens <768px.
+Svelte dashboard: Sidebar.svelte collapses to hamburger on <768px. Overview cards stack vertically. DataTable adds
+horizontal scroll wrapper. TopBar.svelte: responsive title truncation. src/public/tui.html: show 'Web terminal not
+supported on mobile' message at <768px with link to SSH instructions. CSS breakpoints: 375px (iPhone SE), 390px
+(iPhone 14), 768px (iPad), 1024px+ (desktop).
+AC: No horizontal scroll at 375px. Sidebar collapses. /tui shows mobile message.
+Task 4: Login Page Polish
+Polish src/public/login.html (created by Opus-01 as minimal form): Center form vertically+horizontally. Max-width
+400px. 'JClaw' branded heading. Password field: show/hide toggle button with eye icon (inline SVG, no dep).
+'Remember me' checkbox (when checked, POST includes rememberMe=true — session middleware extends to 30d).
+Failed login: CSS shake animation on form + red error text below password. Rate limited (429): countdown timer
+reading Retry-After header. Auto-focus password field on page load. Accessible: all ARIA labels, keyboard navigable.
+AC: Centered, branded, show/hide toggle, shake on fail, countdown on 429.
+Commit: fix(ux): [scope] [session-url]. PR: 'feat(ux): accessibility, responsive layout, login polish'. Copilot.
+JClaw QA — Sonnet 02 of 02 | Sprint 2
