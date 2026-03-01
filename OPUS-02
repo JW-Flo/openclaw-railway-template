@@ -1,0 +1,42 @@
+OPUS-02: Reliability & Process Management
+JClaw / OpenClaw Railway Template QA Remediation
+MODEL: Claude Opus | Est. session: 40-50 min | Prompt 2 of 6
+Trigger: "Execute opus-02 reliability and process management"
+Depends on: Opus-01 (safeSpawn, session auth exist)
+Task 1: Process Supervisor
+Create src/lib/process-supervisor.js replacing raw gateway spawn. (a) Spawn gateway via safeSpawn, pipe
+stdout/stderr to structured logger. (b) Health loop: HTTP GET 127.0.0.1:18789 every 10s. 3 consecutive failures =
+restart. (c) Backoff: 1s, 2s, 4s, 8s, max 30s. Reset after 60s healthy. (d) Circuit breaker: 10 restarts in 5min = degraded
+mode (stop retrying, surface on /setup). (e) EventEmitter: gateway:started/crashed/healthy/degraded. (f) getStatus()
+returns {state, uptime, restartCount, lastError, pid, memoryMB}. Expose /setup/api/status endpoint.
+AC: Kill gateway manually — restarts within 2s
+AC: 10+ rapid crashes enters degraded, no loop
+AC: /setup/api/status returns supervisor state
+Task 2: Stale PID Lock Cleanup
+On wrapper startup BEFORE spawning gateway: check /data/.openclaw/.gateway.pid. If exists, verify PID running
+(kill(pid,0) in try/catch). Stale = delete + log warning. After spawn, write new PID. On SIGTERM, delete lock file.
+AC: Stale PID from previous container cleaned on startup
+AC: SIGTERM cleans PID file
+Task 3: Graceful Shutdown Chain
+Create src/lib/shutdown.js. On SIGTERM/SIGINT: (a) server.close() — stop new connections. (b)
+backupManager.createBackup() — stub if not yet implemented. (c) SIGTERM to gateway child. Wait 10s. (d) SIGKILL
+if still alive. (e) Clean PID lock. (f) process.exit(0). Register once in server.js. Prevent double-registration.
+AC: SIGTERM triggers ordered shutdown sequence
+AC: Hung gateway gets SIGKILL after 10s
+Task 4: Memory Management
+Dockerfile: ENV NODE_OPTIONS="--max-old-space-size=450" for wrapper. In supervisor: read /proc/[pid]/status
+VmRSS for gateway memory. Read cgroup limit from /sys/fs/cgroup/memory.max. 80% = log WARNING. 90% =
+graceful restart. Add MEMORY_LIMIT_MB env var override. README: 'Railway Hobby (512MB) below minimum. Use
+Pro (1GB+).'
+AC: Memory warning at 80%, restart at 90%
+AC: README documents minimum memory requirement
+Task 5: Structured Logging + Log Rotation
+Create src/lib/logger.js. JSON to stdout (Railway captures). Fields: timestamp, level,
+component(wrapper|gateway|auth|backup), message, metadata. Levels: DEBUG/INFO/WARN/ERROR/CRITICAL.
+LOG_LEVEL env (default INFO). Gateway stdout: attempt JSON parse, merge if valid, wrap if raw text. Volume logs:
+max 10MB/file, keep 5 files. Request logging middleware: method, path, status, duration_ms, redacted IP.
+AC: All wrapper output is valid JSON lines
+AC: Volume logs rotate at 10MB, max 50MB total
+New files: src/lib/process-supervisor.js, src/lib/shutdown.js, src/lib/logger.js
+Commit: fix(reliability): [title] [session-url]. PR: 'feat(reliability): supervisor, shutdown, memory'. Copilot.
+JClaw QA Remediation — Opus 02 of 04
