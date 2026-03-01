@@ -114,6 +114,34 @@ The bot has built-in safety:
 - Deploying the bot (use `deploy-pipeline`)
 - Non-trading questions
 
+## Known Failure Patterns
+
+### Dashboard/API Auth 401s
+- **Symptom**: Dashboard UI constantly receives 401, degrades to fallback behavior
+- **Cause**: Auth header omission after SPA redirect or JWT auth migration
+- **Fix**: Ensure every dashboard API call includes the correct auth header (cookie or bearer token)
+
+### Error Counter Bug (auto-pause logic)
+- **Symptom**: Bot never auto-pauses despite repeated failures, or pauses unexpectedly
+- **Cause**: `consecutiveErrors` counter resets on partial success instead of full cycle completion
+- **Fix**: Store `consecutiveErrors` + `lastErrorAt`; reset only when a complete trading cycle succeeds
+- **Verify**: Check `utils/safety.ts` for counter reset logic
+
+### External API Failures
+- All external calls (Kalshi, Polymarket, news APIs) must have:
+  - Timeouts (prevent hanging connections)
+  - Jittered retries with exponential backoff
+  - Structured logging via `utils/logger.ts` (never `console.log`)
+  - Audit log entry on every side-effecting step (order placement, cancel, credential change)
+
+### Safety Invariants (merge-blocking)
+Any PR that modifies these must be explicitly reviewed and approved:
+- Kill switch (`utils/safety.ts`)
+- Max position sizing limits
+- Daily loss limits
+- Balance check thresholds
+- Audit logging behavior
+
 ## Key Environment Variables (set on Railway)
 
 - `KALSHI_API_KEY` — Kalshi API credentials

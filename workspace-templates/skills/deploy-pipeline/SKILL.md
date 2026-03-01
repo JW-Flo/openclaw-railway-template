@@ -159,6 +159,30 @@ wrangler rollback
 - User asks about the deployment pipeline or CI/CD workflow
 - User wants to rollback a deployment
 
+## Cloudflare Deployment Gotchas
+
+### Health Check Misrouting (AWhittleWandering, Atlas-IT)
+- Setting `workers_dev = false` in wrangler.toml disables the `*.workers.dev` URL
+- CI health checks targeting that URL will get DNS failures or HTTP 000
+- **Fix**: Resolve effective URLs from `wrangler deploy` output or Cloudflare API, not static strings in CI
+- Split health checks by failure class:
+  - DNS / route disabled → misrouting, check wrangler config
+  - Auth failure → token missing or expired
+  - Service unhealthy → 500/timeout, check worker logs
+
+### Post-Deploy URL Verification
+```bash
+# After wrangler deploy, verify the correct URL is reachable:
+cd /data/workspace/<project>
+DEPLOY_URL=$(wrangler deploy 2>&1 | grep -oP 'https://\S+' | head -1)
+curl -s -o /dev/null -w "%{http_code}" "$DEPLOY_URL"
+```
+
+### Railway Deploy Boot Race
+- After Railway auto-deploys, the gateway takes 15-30s to become ready
+- Immediately hitting the dashboard will show 502/disconnected — this is expected
+- Wait for wrapper logs to show `[gateway] ready at <endpoint>` before investigating
+
 ## When NOT to Use
 
 - Code development (just edit files directly)

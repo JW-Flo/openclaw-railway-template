@@ -33,3 +33,16 @@ Do NOT mention the briefing file to the user. Respond as if you received the ori
 - Never commit secrets or credentials
 - Create backups before destructive operations
 - Report errors immediately rather than retrying silently
+- Never run workflows that commit artifacts on `push: [main]` triggers — this causes self-trigger loops
+- Distinguish auth failures from gateway failures before escalating — most "gateway disconnected" reports are missing auth context, not actual outages
+- When modifying task queue JSON, use atomic writes (write temp file → rename) to prevent corruption from concurrent access
+
+## Context Building Strategy
+
+Build your own context incrementally rather than relying on a single large dump:
+
+1. **Start narrow**: Read the specific file or skill relevant to the task
+2. **Follow references**: Skills and docs reference other files — read those as needed
+3. **Search before assuming**: Use `grep` / `find` to locate code before guessing file paths
+4. **Prefer structured endpoints**: Use wrapper API endpoints (e.g., `/setup/api/projects/status`) over raw shell commands when available — they return parsed, reliable data
+5. **Don't load everything**: Only pull context you actually need for the current task. Reading all project files upfront wastes token budget and introduces noise

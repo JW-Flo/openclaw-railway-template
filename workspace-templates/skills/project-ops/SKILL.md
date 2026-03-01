@@ -77,9 +77,30 @@ done
 - Detailed code review (use `github` skill)
 - Deployment (use `deploy-pipeline` skill)
 
+## Project-Specific Operational Notes
+
+### Project-AtlasIT
+- **Workflow hazard**: Workflows that commit evidence artifacts can self-trigger on `push: [main]`. If builds are running continuously, check workflow triggers first.
+- **Fix**: Evidence commits should only run via `workflow_dispatch` or on PR branches, never on `push: [main]`.
+- **CI linter rule**: Any workflow with both `push: [main]` and `git commit` + `git push` steps is a bug.
+
+### AWhittleWandering
+- **Health check routing**: Cloudflare `workers_dev = false` can disable the `*.workers.dev` URL. CI health checks may probe a dead endpoint.
+- **Fix**: Resolve effective URLs from wrangler output or Cloudflare API, don't use static strings.
+- **Split checks**: DNS/route disabled (misrouting) vs auth failure (token missing) vs service unhealthy (500/timeout) — each has a different fix.
+
+### market_agents
+- **Auth header omissions**: Dashboard/API calls missing auth headers cause persistent 401 fallbacks. Check recent PRs for auth regression.
+- **Error counter bug**: The "auto-pause after N errors" logic may be effectively dead code if the counter resets incorrectly. Verify `consecutiveErrors` resets only on full cycle success.
+- **Safety invariants are merge-blocking**: Any change to kill switch, max position sizing, daily loss limits, or audit logging requires explicit review.
+
+### JW-Site
+- Staging/prototyping environment — lower risk, but still follow conventional commits and PR workflow.
+
 ## Tips
 
 - Always `git fetch` before checking if repos are behind
 - Use `gh pr list --repo JW-Flo/<repo>` to check open PRs per project
 - Use `gh issue list --repo JW-Flo/<repo>` for outstanding issues
 - For cross-project search: `grep -r "pattern" /data/workspace/*/src/`
+- When diagnosing cross-project issues, classify the failure type first: auth boundary, CI loop, health misroute, or data race
