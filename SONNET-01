@@ -1,0 +1,58 @@
+SONNET-01: Documentation & Operational Guides
+JClaw / OpenClaw Railway Template QA Remediation
+MODEL: Claude Sonnet | Est: 25-35 min | CONCURRENT with Opus-02 + Opus-03
+Trigger: "Execute sonnet-01 documentation"
+Runs concurrently with Opus-02 and Opus-03 after Opus-01 is merged. Rebase from main before starting.
+Branch: claude/documentation-[sessionId]
+Scope & File Boundaries
+Create/update documentation files ONLY. No code. No package.json. No server.js. Creates: SECURITY.md,
+CONTRIBUTING.md, docs/RUNBOOK.md. Updates: CLAUDE.md — APPEND new sections ONLY, do NOT delete or
+modify ANY existing content (it has 500+ lines of hard-won operational gotchas built over 133 commits).
+PARALLEL SAFETY: Only .md files. No overlap with Opus-02 (src/alerts/) or Opus-03 (test/, config). Do NOT touch
+README.md — Opus-03 adds a CI badge to it.
+Task 1: SECURITY.md
+Create SECURITY.md. Sections: (a) Security Architecture post-hardening: session auth for /setup replacing Basic,
+CSRF double-submit, rate limiting tiers (shell 10/min, chat 30/min, API 20/min, login 5/15min), encrypted credential
+storage (AES-256-GCM), bootstrap integrity (SHA-256 manifests), safe-exec command allowlisting, gateway token
+auto-gen (64-char hex). (b) Alert Monitoring: reference SECURITY_ALERTS_PLAN.md for full architecture —
+summarize the 5 monitors (SSH, disk, config audit, gateway crash, auth brute force). (c) Vulnerability Reporting:
+placeholder email, 72h response SLA, 90-day responsible disclosure. (d) Operator Security Checklist:
+SETUP_PASSWORD >=16 chars, review workspace templates on first deploy, set ALERTS_CHAT_ID, check
+/setup/api/bootstrap-status, verify /setup/api/security-posture. (e) Known Limitations: single-container SPOF, no MFA
+yet, no IP allowlisting, shell API allowlist is defense-in-depth not sandboxing, localhost proxy bypasses gateway auth.
+AC: Covers architecture, alerting, reporting, checklist, limitations.
+Task 2: CONTRIBUTING.md
+Dev setup: clone, pnpm install, docker build, local run (copy exact commands from CLAUDE.md). Code style: ESLint
+config, Prettier, no direct child_process outside safe-exec.js. Testing: vitest, coverage thresholds (60/50/60), how to
+add tests, test/ mirrors src/. PR process: branch naming (claude/ prefix), commit convention (fix/feat/test/docs:), CI
+must pass, Copilot review, squash merge (per CLAUDE.md gotcha #12). Architecture map: src/server.js (monolith —
+minimize changes), src/lib/ (utilities), src/middleware/ (Express middleware), src/alerts/ (monitoring), src/public/ (static
+HTML), dashboard/ (SvelteKit app), workspace-templates/ (agent personality + skills), test/ mirrors src/. Security
+constraints: ALL spawns through safe-exec, ALL creds through credential-store, ALL password comparisons via
+timingSafeEqual, CSRF token required for mutations.
+AC: New contributor can clone, test, and ship a PR from this doc alone.
+Task 3: docs/RUNBOOK.md
+Create docs/ directory. Operational runbook. (a) Common issues — reformat CLAUDE.md's 'Known Failure Patterns'
+section as operator-friendly troubleshooting steps. Reference CLAUDE.md for deep details, don't duplicate raw
+content. Add QA-audit-specific findings: OOM on Hobby plan (fix: upgrade to Pro 1GB+), stale PID locks
+(gateway-monitor alert detects), bootstrap tampered (check /setup/api/bootstrap-status, rebaseline). (b) Monitoring:
+what to watch (alert channels, /setup/api/status, /healthz, memory/disk), where to check (Railway logs, stdout
+[SECURITY-ALERT] prefix). (c) Backup/restore (placeholder for Sprint 2 backup-manager). (d) Emergency:
+force-restart Railway service, rotate gateway token (delete gateway.token file + restart), wipe and rebuild (/data
+cleanup). (e) Updating OpenClaw: pin version in Dockerfile, test local, deploy, verify /healthz.
+AC: 5 most common issues with exact fix steps. Refs CLAUDE.md for depth.
+Task 4: CLAUDE.md Append (preserve all existing content)
+APPEND the following sections to the END of existing CLAUDE.md. Do NOT modify, reformat, or delete ANY existing
+lines. (a) '## New Module Map' section: src/lib/safe-exec.js (command allowlisting), src/lib/credential-store.js
+(AES-256-GCM), src/lib/bootstrap-guard.js (SHA-256 integrity), src/middleware/csrf.js (double-submit cookie),
+src/middleware/session-auth.js (/setup sessions), src/alerts/** (per SECURITY_ALERTS_PLAN). (b) '## Testing'
+section: vitest, run with pnpm test, coverage with pnpm test:coverage, test file naming convention
+(test/lib/[module].test.js), coverage thresholds. (c) '## Security Invariants' section: all spawns through safeSpawn, all
+creds through credential-store, all password comparisons via timingSafeEqual, CSRF required for POST/PUT/DELETE
+on /setup/api/*. (d) Add gotcha #25: safe-exec.js is now the canonical way to spawn processes — never import
+childProcess directly in new code.
+AC: CLAUDE.md has new sections appended. All existing 500+ lines untouched.
+New: SECURITY.md, CONTRIBUTING.md, docs/RUNBOOK.md. Modified: CLAUDE.md (append only, zero existing
+lines changed).
+Commit: docs: [scope] [session-url]. PR: 'docs: SECURITY, CONTRIBUTING, RUNBOOK, CLAUDE update'. Copilot.
+JClaw QA — Sonnet 01 of 02 | Concurrent with Opus-02 + Opus-03
