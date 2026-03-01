@@ -6,8 +6,24 @@ class ApiError extends Error {
   }
 }
 
+function getCsrfToken() {
+  // Read from meta tag first (server-rendered pages)
+  const meta = document.querySelector('meta[name="csrf-token"]');
+  if (meta) return meta.getAttribute('content');
+  // Fall back to _csrf_token cookie
+  const match = document.cookie.split(';').map(c => c.trim()).find(c => c.startsWith('_csrf_token='));
+  return match ? match.split('=')[1] : null;
+}
+
 async function request(method, path, body) {
   const opts = { method, headers: {} };
+  // Include CSRF token on state-changing requests
+  if (method !== 'GET') {
+    const csrfToken = getCsrfToken();
+    if (csrfToken) {
+      opts.headers['X-CSRF-Token'] = csrfToken;
+    }
+  }
   if (body !== undefined) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);

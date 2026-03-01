@@ -1,4 +1,3 @@
-import childProcess from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -9,6 +8,24 @@ import httpProxy from "http-proxy";
 import pty from "node-pty";
 import { WebSocketServer } from "ws";
 
+import { safeSpawn, isCommandAllowed } from "./lib/safe-exec.js";
+import { initBootstrapGuard, verifyBootstrap, rebaselineManifest } from "./lib/bootstrap-guard.js";
+import { createCredentialStore, safePasswordCompare } from "./lib/credential-store.js";
+import { createCsrfProtection } from "./middleware/csrf.js";
+import { createSessionAuth } from "./middleware/session-auth.js";
+
+// ── Alert System (stubs for OPUS-02) ────────────────────────────────────
+let alertSystem = null;
+try {
+  alertSystem = await import("./alerts/index.js");
+} catch (err) {
+  if (err?.code === "ERR_MODULE_NOT_FOUND" || err?.code === "MODULE_NOT_FOUND") {
+    // alerts module not yet available — graceful no-op
+  } else {
+    console.error("[alerts] failed to load alerts module:", err);
+  }
+}
+
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
   process.env.OPENCLAW_STATE_DIR?.trim() ||
@@ -18,6 +35,11 @@ const WORKSPACE_DIR =
   path.join(STATE_DIR, "workspace");
 
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim();
+
+// ── Encrypted Credential Store ──────────────────────────────────────────
+const credentialStore = SETUP_PASSWORD
+  ? createCredentialStore(STATE_DIR, SETUP_PASSWORD)
+  : null;
 
 function resolveGatewayToken() {
   const envTok = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
@@ -1215,7 +1237,7 @@ function requireDashAuth(req, res, next) {
     const decoded = Buffer.from(encoded, "base64").toString("utf8");
     const idx = decoded.indexOf(":");
     const password = idx >= 0 ? decoded.slice(idx + 1) : "";
-    if (SETUP_PASSWORD && password === SETUP_PASSWORD) {
+    if (SETUP_PASSWORD && safePasswordCompare(password, SETUP_PASSWORD)) {
       req.dashUser = { id: "basic-auth", username: "owner", role: "owner", displayName: "Owner" };
       return next();
     }
@@ -1379,7 +1401,8 @@ async function startGateway() {
     "--allow-unconfigured",
   ];
 
-  gatewayProc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
+  gatewayProc = safeSpawn(OPENCLAW_NODE, clawArgs(args), {
+    bypassAllowlist: true,
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
@@ -1419,6 +1442,7 @@ async function startGateway() {
 
   gatewayProc.on("exit", (code, signal) => {
     console.error(`[gateway] exited code=${code} signal=${signal}`);
+    alertSystem?.alertOnGatewayCrash?.({ code, signal });
     gatewayProc = null;
     if (!shuttingDown && isConfigured()) {
       console.log("[gateway] scheduling auto-restart in 3s...");
@@ -1518,6 +1542,12 @@ function requireSetupAuth(req, res, next) {
     return res.status(429).type("text/plain").send("Too many requests. Try again later.");
   }
 
+  // Check setup session cookie first (browser sessions)
+  if (setupSessionAuth?.hasValidSession(req)) {
+    req.dashUser = { id: "session-auth", username: "owner", role: "owner", displayName: "Owner" };
+    return next();
+  }
+
   // Also accept dashboard session cookies (so SvelteKit dashboard API calls work)
   const cookieToken = (req.headers.cookie || "").split(";").map(c => c.trim()).find(c => c.startsWith("jclaw_session="));
   const sessionToken = cookieToken ? cookieToken.split("=")[1] : req.headers["x-dashboard-token"];
@@ -1527,19 +1557,22 @@ function requireSetupAuth(req, res, next) {
     return next();
   }
 
+  // Fall back to Basic auth (for curl/programmatic access)
   const header = req.headers.authorization || "";
   const [scheme, encoded] = header.split(" ");
   if (scheme !== "Basic" || !encoded) {
+    // For browser requests without any auth, redirect to login page
+    const accept = req.headers.accept || "";
+    if (accept.includes("text/html")) {
+      return res.redirect("/login");
+    }
     res.set("WWW-Authenticate", 'Basic realm="JClaw Setup"');
     return res.status(401).send("Auth required");
   }
   const decoded = Buffer.from(encoded, "base64").toString("utf8");
   const idx = decoded.indexOf(":");
   const password = idx >= 0 ? decoded.slice(idx + 1) : "";
-  const passwordHash = crypto.createHash("sha256").update(password).digest();
-  const expectedHash = crypto.createHash("sha256").update(SETUP_PASSWORD).digest();
-  const isValid = crypto.timingSafeEqual(passwordHash, expectedHash);
-  if (!isValid) {
+  if (!safePasswordCompare(password, SETUP_PASSWORD)) {
     res.set("WWW-Authenticate", 'Basic realm="JClaw Setup"');
     return res.status(401).send("Invalid password");
   }
@@ -1550,6 +1583,53 @@ function requireSetupAuth(req, res, next) {
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
+
+// ── CSRF Protection ─────────────────────────────────────────────────────
+const csrf = createCsrfProtection({
+  exemptPaths: ["/api/v1/", "/healthz", "/auth/"],
+  exemptCheck: (req) => {
+    // Exempt Bearer-token authenticated requests (API clients, not browsers)
+    const auth = req.headers.authorization || "";
+    if (auth.startsWith("Bearer ")) return true;
+    // Exempt Basic auth requests (curl / programmatic access)
+    if (auth.startsWith("Basic ")) return true;
+    return false;
+  },
+});
+// Inject CSRF cookie on all responses
+app.use("/setup", csrf.injectToken);
+// Protect state-changing requests on /setup/api/*
+app.use("/setup/api", csrf.protect);
+
+// ── Session Auth for /setup ─────────────────────────────────────────────
+const loginRateLimiter = createRateLimiter(15 * 60 * 1000, 5); // 5 req per 15 minutes
+const setupSessionAuth = SETUP_PASSWORD
+  ? createSessionAuth({
+      stateDir: STATE_DIR,
+      setupPassword: SETUP_PASSWORD,
+      loginRateLimiter,
+    })
+  : null;
+
+// Login page
+app.get("/login", (_req, res) => {
+  res.sendFile(path.join(process.cwd(), "src", "public", "login.html"));
+});
+
+// Login/logout API
+app.post("/auth/login", express.json(), (req, res) => {
+  if (!setupSessionAuth) {
+    return res.status(500).json({ ok: false, error: "SETUP_PASSWORD is not configured" });
+  }
+  return setupSessionAuth.loginHandler(req, res);
+});
+
+app.post("/auth/logout", (req, res) => {
+  if (!setupSessionAuth) {
+    return res.json({ ok: true });
+  }
+  return setupSessionAuth.logoutHandler(req, res);
+});
 
 app.get("/healthz", async (_req, res) => {
   let gateway = "unconfigured";
@@ -1779,14 +1859,19 @@ function buildOnboardArgs(payload) {
 
 function runCmd(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    const proc = childProcess.spawn(cmd, args, {
-      ...opts,
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: STATE_DIR,
-        OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
-      },
-    });
+    let proc;
+    try {
+      proc = safeSpawn(cmd, args, {
+        ...opts,
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: STATE_DIR,
+          OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
+        },
+      });
+    } catch (err) {
+      return resolve({ code: 126, output: `[safe-exec] ${err.message}\n` });
+    }
 
     let out = "";
     proc.stdout?.on("data", (d) => (out += d.toString("utf8")));
@@ -1880,6 +1965,16 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
     const ok = onboard.code === 0 && isConfigured();
 
     if (ok) {
+      // Dual-write credentials to encrypted store (backward compat: openclaw.json still has them)
+      if (credentialStore && payload.authSecret?.trim()) {
+        try {
+          credentialStore.encrypt(`auth.${payload.authChoice}`, payload.authSecret.trim());
+          extra += "\n[setup] API key stored in encrypted credential store.\n";
+        } catch (err) {
+          console.warn(`[credential-store] Failed to encrypt auth key: ${err.message}`);
+        }
+      }
+
       extra += "\n[setup] Configuring gateway settings...\n";
 
       const allowInsecureResult = await runCmd(
@@ -1953,6 +2048,9 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       }
 
       if (payload.telegramToken?.trim()) {
+        if (credentialStore) {
+          try { credentialStore.encrypt("channel.telegram.botToken", payload.telegramToken.trim()); } catch {}
+        }
         extra += await configureChannel("telegram", {
           enabled: true,
           dmPolicy: "pairing",
@@ -1963,6 +2061,9 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       }
 
       if (payload.discordToken?.trim()) {
+        if (credentialStore) {
+          try { credentialStore.encrypt("channel.discord.token", payload.discordToken.trim()); } catch {}
+        }
         extra += await configureChannel("discord", {
           enabled: true,
           token: payload.discordToken.trim(),
@@ -1972,6 +2073,12 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       }
 
       if (payload.slackBotToken?.trim() || payload.slackAppToken?.trim()) {
+        if (credentialStore) {
+          try {
+            if (payload.slackBotToken?.trim()) credentialStore.encrypt("channel.slack.botToken", payload.slackBotToken.trim());
+            if (payload.slackAppToken?.trim()) credentialStore.encrypt("channel.slack.appToken", payload.slackAppToken.trim());
+          } catch {}
+        }
         extra += await configureChannel("slack", {
           enabled: true,
           botToken: payload.slackBotToken?.trim() || undefined,
@@ -2066,6 +2173,20 @@ app.post("/setup/api/doctor", requireSetupAuth, async (_req, res) => {
     ok: result.code === 0,
     output: result.output,
   });
+});
+
+// ── Bootstrap Integrity ──────────────────────────────────────────────────
+let bootstrapStatus = { verified: true, mismatches: [], newFiles: [], missingFiles: [], pending: true };
+
+app.get("/setup/api/bootstrap-status", requireSetupAuth, (_req, res) => {
+  // Re-verify live (not cached) for accurate status
+  const status = verifyBootstrap(STATE_DIR, WORKSPACE_DIR);
+  return res.json({ ok: true, ...status });
+});
+
+app.post("/setup/api/bootstrap/rebaseline", requireSetupAuth, (_req, res) => {
+  const manifest = rebaselineManifest(STATE_DIR, WORKSPACE_DIR);
+  return res.json({ ok: true, files: Object.keys(manifest).length });
 });
 
 app.get("/setup/api/gateway-help", requireSetupAuth, async (_req, res) => {
@@ -2198,6 +2319,11 @@ app.post("/setup/api/switch-provider", requireSetupAuth, async (req, res) => {
     }
     if (authChoice === "token" && secret) {
       args.push("--token-provider", "anthropic", "--token", secret);
+    }
+
+    // Store in encrypted credential store (dual-write)
+    if (credentialStore && secret) {
+      try { credentialStore.encrypt(`auth.${authChoice}`, secret); } catch {}
     }
 
     // Delete existing config so onboard can re-create it
@@ -2470,6 +2596,12 @@ app.post("/setup/api/shell", requireSetupAuth, async (req, res) => {
     }
   }
 
+  // Validate the first command word against the safe-exec allowlist
+  const firstCmd = command.trim().split(/[\s|;&]/)[0].split("/").pop();
+  if (!firstCmd || !isCommandAllowed(firstCmd)) {
+    return res.status(403).json({ ok: false, error: `Command "${firstCmd}" is not in the allowlist. Allowed: node, git, npm, pnpm, openclaw, cat, ls, find, grep, wc, head, tail, df, free, ps, uptime, whoami, echo, env, printenv, sh, bash, python3, jq, curl, wget` });
+  }
+
   // Resolve working directory (must be within workspace)
   let workDir = WORKSPACE_DIR;
   if (cwd) {
@@ -2479,7 +2611,7 @@ app.post("/setup/api/shell", requireSetupAuth, async (req, res) => {
     }
   }
 
-  const r = await runCmd("sh", ["-c", command], { cwd: workDir });
+  const r = await runCmd("sh", ["-c", command], { cwd: workDir, bypassAllowlist: true });
   return res.json({ ok: r.code === 0, code: r.code, output: r.output });
 });
 
@@ -3118,7 +3250,7 @@ app.get("/setup/api/auth/me", (req, res) => {
       const decoded = Buffer.from(encoded, "base64").toString("utf8");
       const idx = decoded.indexOf(":");
       const password = idx >= 0 ? decoded.slice(idx + 1) : "";
-      if (SETUP_PASSWORD && password === SETUP_PASSWORD) {
+      if (SETUP_PASSWORD && safePasswordCompare(password, SETUP_PASSWORD)) {
         return res.json({ ok: true, user: { id: "basic-auth", username: "owner", role: "owner", displayName: "Owner" }, authMethod: "basic" });
       }
     }
@@ -3388,7 +3520,8 @@ app.post("/setup/api/projects/ideas", requireSetupAuth, (req, res) => {
         const prompt = `Based on the existing projects: ${existingProjects}. ${context || "Suggest 5 innovative project ideas that complement the existing portfolio. Include: AI/ML projects, web applications, automation tools, and data analysis projects."} Format as JSON array with fields: name, description, template (node/python/other), category, difficulty (easy/medium/hard).`;
 
         sendSSE("status", { status: "generating" });
-        const proc = childProcess.spawn(OPENCLAW_NODE, clawArgs(["agent", "--session-id", "project-ideas", "--message", prompt, "--timeout", "60"]), {
+        const proc = safeSpawn(OPENCLAW_NODE, clawArgs(["agent", "--session-id", "project-ideas", "--message", prompt, "--timeout", "60"]), {
+          bypassAllowlist: true,
           env: { ...process.env, OPENCLAW_STATE_DIR: STATE_DIR, OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR },
         });
 
@@ -4520,7 +4653,8 @@ app.post("/setup/api/chat/send", requireDashAuth, async (req, res) => {
   // Inject BYOK keys for non-owner users (owner uses instance keys)
   const byokEnv = (user.role !== "owner") ? buildByokEnv(user.id) : {};
 
-  const proc = childProcess.spawn(OPENCLAW_NODE, clawArgs(agentArgs), {
+  const proc = safeSpawn(OPENCLAW_NODE, clawArgs(agentArgs), {
+    bypassAllowlist: true,
     env: {
       ...process.env,
       ...byokEnv,
@@ -4646,7 +4780,8 @@ app.post("/setup/api/sessions/resume", requireSetupAuth, (req, res) => {
     "--timeout", String(timeout),
   ];
 
-  const proc = childProcess.spawn(OPENCLAW_NODE, clawArgs(agentArgs), {
+  const proc = safeSpawn(OPENCLAW_NODE, clawArgs(agentArgs), {
+    bypassAllowlist: true,
     env: {
       ...process.env,
       OPENCLAW_STATE_DIR: STATE_DIR,
@@ -4918,11 +5053,12 @@ app.post("/api/v1/agent/message", requireApiToken, async (req, res) => {
     "X-Accel-Buffering": "no",
   });
 
-  const proc = childProcess.spawn(OPENCLAW_NODE, clawArgs([
+  const proc = safeSpawn(OPENCLAW_NODE, clawArgs([
     "agent", "--session-id", sid,
     "--message", agentMessage,
     "--timeout", String(tout),
   ]), {
+    bypassAllowlist: true,
     env: { ...process.env, OPENCLAW_STATE_DIR: STATE_DIR, OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR },
   });
 
@@ -5261,6 +5397,19 @@ const server = app.listen(PORT, () => {
   console.log(`[wrapper] web TUI: ${ENABLE_WEB_TUI ? "enabled" : "disabled"}`);
   console.log(`[wrapper] configured: ${isConfigured()}`);
 
+  // Initialize bootstrap integrity guard
+  try {
+    bootstrapStatus = initBootstrapGuard(STATE_DIR, WORKSPACE_DIR);
+    if (!bootstrapStatus.verified) {
+      console.error(`[SECURITY-ALERT] Bootstrap integrity check failed: ${bootstrapStatus.mismatches.length} modified, ${bootstrapStatus.missingFiles.length} missing`);
+    }
+  } catch (err) {
+    console.warn(`[bootstrap-guard] init error: ${err.message}`);
+  }
+
+  // Initialize alert system (OPUS-02 stub)
+  alertSystem?.initAlerts?.({ stateDir: STATE_DIR });
+
   if (isConfigured()) {
     (async () => {
       try {
@@ -5348,6 +5497,8 @@ proxy.on("open", (proxySocket) => {
 async function gracefulShutdown(signal) {
   console.log(`[wrapper] received ${signal}, shutting down`);
   shuttingDown = true;
+  alertSystem?.shutdownAlerts?.();
+  if (setupSessionAuth) setupSessionAuth.cleanup();
   stopScheduler();
   stopAutoScanner();
   stopHealthMonitor();
