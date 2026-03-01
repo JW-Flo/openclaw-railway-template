@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -13,6 +13,32 @@
       --font-sans: 'Space Grotesk', ui-sans-serif, system-ui, -apple-system, sans-serif;
     }
     [x-cloak] { display: none !important; }
+    /* Skip-to-content link */
+    .skip-link {
+      position: absolute;
+      top: -100%;
+      left: 0;
+      background: #dc2626;
+      color: #fff;
+      padding: 8px 16px;
+      border-radius: 0 0 6px 0;
+      font-weight: 600;
+      font-size: 14px;
+      z-index: 9999;
+      text-decoration: none;
+    }
+    .skip-link:focus {
+      top: 0;
+    }
+    /* Visible focus styles */
+    :focus-visible {
+      outline: 2px solid #dc2626;
+      outline-offset: 2px;
+    }
+    /* Token inputs: prevent iOS zoom, allow long values to wrap */
+    input[type="password"], input[type="text"] {
+      font-size: 16px !important;
+    }
   </style>
   <script>
   document.addEventListener('alpine:init', () => {
@@ -225,11 +251,12 @@
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
 </head>
 <body class="bg-neutral-100 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 min-h-screen font-sans" x-data="setupApp()">
-  <div class="max-w-3xl mx-auto px-4 py-12 min-w-[400px]">
-    <div class="flex justify-center mb-6">
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  <div id="main-content" class="max-w-3xl mx-auto px-4 py-12 min-w-[400px]">
+    <div class="flex justify-center mb-6" aria-hidden="true">
       <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
-        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="OpenClaw" class="max-w-[280px] h-auto">
+        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="" class="max-w-[280px] h-auto">
       </picture>
     </div>
     <h1 class="text-2xl font-semibold text-center tracking-tight mb-2">Personal AI Assistant</h1>
@@ -241,7 +268,7 @@
           <span class="text-xs uppercase tracking-wide text-neutral-500 font-medium">🦞 OpenClaw</span>
           <span x-show="openclawVersion" x-text="openclawVersion" class="text-xs text-neutral-400 dark:text-neutral-600 ml-2"></span>
         </div>
-        <span x-text="status" class="text-sm" :class="configured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'"></span>
+        <span x-text="status" aria-live="polite" aria-atomic="true" class="text-sm" :class="configured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'"></span>
       </div>
       <div x-show="configured" class="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-800 flex flex-wrap gap-4">
         <a href="/openclaw" target="_blank" class="inline-flex items-center gap-2 text-sm text-teal-600 dark:text-teal-400 hover:text-teal-500 dark:hover:text-teal-300 transition-colors">
@@ -305,7 +332,7 @@
           </div>
         </div>
 
-        <div x-show="log" class="bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-lg p-4 font-mono text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap max-h-64 overflow-y-auto" x-text="log"></div>
+        <div x-show="log" role="log" aria-live="polite" aria-label="Setup output" class="bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-lg p-4 font-mono text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap max-h-64 overflow-y-auto" x-text="log"></div>
       </div>
     </div>
 
@@ -313,12 +340,15 @@
       <div class="flex items-center justify-center gap-2 mb-8">
         <template x-for="s in totalSteps" :key="s">
           <div class="flex items-center">
-            <div
+            <button
+              type="button"
               class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all cursor-pointer"
               :class="step === s ? 'bg-red-600 text-white' : (step > s ? 'bg-emerald-600 text-white' : 'bg-neutral-200 dark:bg-neutral-800 text-neutral-500')"
+              :aria-current="step === s ? 'step' : undefined"
+              :aria-label="'Step ' + s + ' of ' + totalSteps"
               @click="step = s"
               x-text="s"
-            ></div>
+            ></button>
             <div x-show="s < totalSteps" class="w-12 h-0.5 mx-1" :class="step > s ? 'bg-emerald-600' : 'bg-neutral-200 dark:bg-neutral-800'"></div>
           </div>
         </template>
@@ -331,8 +361,8 @@
 
           <div class="space-y-5">
             <div>
-              <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Provider Group</label>
-              <select x-model="selectedGroup" @change="updateAuthChoices()" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-red-500 transition-colors">
+              <label for="setup-provider-group" class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Provider Group</label>
+              <select id="setup-provider-group" x-model="selectedGroup" @change="updateAuthChoices()" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-red-500 transition-colors">
                 <template x-for="g in authGroups" :key="g.value">
                   <option :value="g.value" x-text="g.label + (g.hint ? ' — ' + g.hint : '')"></option>
                 </template>
@@ -340,8 +370,8 @@
             </div>
 
             <div>
-              <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Auth Method</label>
-              <select x-model="selectedAuth" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-red-500 transition-colors">
+              <label for="setup-auth-method" class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Auth Method</label>
+              <select id="setup-auth-method" x-model="selectedAuth" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-red-500 transition-colors">
                 <template x-for="o in authChoices" :key="o.value">
                   <option :value="o.value" x-text="o.label + (o.hint ? ' — ' + o.hint : '')"></option>
                 </template>
@@ -349,19 +379,19 @@
             </div>
 
             <div>
-              <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">API Key / Token</label>
-              <input x-model="authSecret" type="password" placeholder="Paste your API key or token" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
+              <label for="setup-auth-secret" class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">API Key / Token</label>
+              <input id="setup-auth-secret" x-model="authSecret" type="password" placeholder="Paste your API key or token" autocomplete="current-password" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
             </div>
 
             <div>
-              <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Model</label>
-              <input x-model="model" type="text" placeholder="e.g. openai/gpt-4.1, anthropic/claude-sonnet-4" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
+              <label for="setup-model" class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Model</label>
+              <input id="setup-model" x-model="model" type="text" placeholder="e.g. openai/gpt-4.1, anthropic/claude-sonnet-4" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
               <p class="text-xs text-neutral-500 dark:text-neutral-600 mt-2">Format: provider/model-name</p>
             </div>
 
             <div>
-              <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Wizard Flow</label>
-              <select x-model="flow" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-red-500 transition-colors">
+              <label for="setup-flow" class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Wizard Flow</label>
+              <select id="setup-flow" x-model="flow" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-red-500 transition-colors">
                 <option value="quickstart">Quickstart</option>
                 <option value="advanced">Advanced</option>
                 <option value="manual">Manual</option>
@@ -384,7 +414,7 @@
                 </div>
                 <span class="font-medium">Telegram</span>
               </div>
-              <input x-model="telegramToken" type="password" placeholder="Bot token from @BotFather" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-sky-500 transition-colors" />
+              <input id="setup-telegram-token" x-model="telegramToken" type="password" placeholder="Bot token from @BotFather" aria-label="Telegram bot token" autocomplete="off" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-sky-500 transition-colors" />
               <p class="text-xs text-neutral-500 dark:text-neutral-600 mt-2">Message <code class="bg-neutral-200 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-sky-600 dark:text-sky-400">@BotFather</code> on Telegram and run <code class="bg-neutral-200 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-sky-600 dark:text-sky-400">/newbot</code></p>
             </div>
 
@@ -395,7 +425,7 @@
                 </div>
                 <span class="font-medium">Discord</span>
               </div>
-              <input x-model="discordToken" type="password" placeholder="Bot token from Developer Portal" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-indigo-500 transition-colors" />
+              <input id="setup-discord-token" x-model="discordToken" type="password" placeholder="Bot token from Developer Portal" aria-label="Discord bot token" autocomplete="off" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-indigo-500 transition-colors" />
               <p class="text-xs text-neutral-500 dark:text-neutral-600 mt-2">Enable <strong class="text-amber-600 dark:text-amber-400">MESSAGE CONTENT INTENT</strong> in Bot → Privileged Gateway Intents</p>
             </div>
 
@@ -407,8 +437,8 @@
                 <span class="font-medium">Slack</span>
               </div>
               <div class="space-y-3">
-                <input x-model="slackBotToken" type="password" placeholder="Bot token (xoxb-...)" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-green-500 transition-colors" />
-                <input x-model="slackAppToken" type="password" placeholder="App token (xapp-...)" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-green-500 transition-colors" />
+                <input id="setup-slack-bot-token" x-model="slackBotToken" type="password" placeholder="Bot token (xoxb-...)" aria-label="Slack bot token" autocomplete="off" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-green-500 transition-colors" />
+                <input id="setup-slack-app-token" x-model="slackAppToken" type="password" placeholder="App token (xapp-...)" aria-label="Slack app token" autocomplete="off" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-green-500 transition-colors" />
               </div>
             </div>
           </div>
@@ -463,7 +493,7 @@
             </button>
           </div>
 
-          <div x-show="log" class="bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-lg p-4 font-mono text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap max-h-64 overflow-y-auto" x-text="log"></div>
+          <div x-show="log" role="log" aria-live="polite" aria-label="Setup output" class="bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-lg p-4 font-mono text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap max-h-64 overflow-y-auto" x-text="log"></div>
 
           <p class="text-xs text-neutral-500 dark:text-neutral-600 mt-4">Reset deletes the config file so you can rerun onboarding. Pairing approval grants DM access when dmPolicy=pairing.</p>
         </div>
@@ -490,21 +520,21 @@
       </div>
     </div>
 
-    <div x-show="showPairingModal" x-cloak class="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50" @click.self="showPairingModal = false">
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 w-full max-w-sm mx-4 shadow-xl dark:shadow-none">
-        <h3 class="text-lg font-semibold mb-4">Approve Pairing</h3>
+    <div x-show="showPairingModal" x-cloak class="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50" @click.self="showPairingModal = false" @keydown.escape.window="showPairingModal = false">
+      <div role="dialog" aria-modal="true" aria-labelledby="pairing-modal-title" class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 w-full max-w-sm mx-4 shadow-xl dark:shadow-none">
+        <h3 id="pairing-modal-title" class="text-lg font-semibold mb-4">Approve Pairing</h3>
         <div class="space-y-4">
           <div>
-            <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Channel</label>
-            <select x-model="pairingChannel" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-red-500 transition-colors">
+            <label for="pairing-channel" class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Channel</label>
+            <select id="pairing-channel" x-model="pairingChannel" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-red-500 transition-colors">
               <option value="">Select channel...</option>
               <option value="telegram">Telegram</option>
               <option value="discord">Discord</option>
             </select>
           </div>
           <div>
-            <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Pairing Code</label>
-            <input x-model="pairingCode" type="text" placeholder="e.g. 3EY4PUYS" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
+            <label for="pairing-code" class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Pairing Code</label>
+            <input id="pairing-code" x-model="pairingCode" type="text" placeholder="e.g. 3EY4PUYS" autocomplete="off" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
           </div>
           <div class="flex gap-3 pt-2">
             <button @click="approvePairing()" class="flex-1 bg-red-600 hover:bg-red-700 text-white px-4 py-3 rounded-lg font-medium transition-colors">Approve</button>

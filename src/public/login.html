@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JClaw — Sign In</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f0f1a;
+      --surface: #1a1a2e;
+      --border: #333355;
+      --text: #e0e0f0;
+      --text2: #9999bb;
+      --accent: #7c3aed;
+      --accent2: #a855f7;
+      --red: #ef4444;
+      --red2: #dc2626;
+      --green: #22c55e;
+      --input-bg: #111126;
+      --sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+    }
+
+    /* ── Skip link ─────────────────────────────────────────────────────── */
+    .skip-link {
+      position: absolute; top: -100%; left: 0;
+      background: var(--accent); color: #fff;
+      padding: 8px 16px; border-radius: 0 0 6px 0;
+      font-weight: 600; font-size: 14px; z-index: 9999; text-decoration: none;
+    }
+    .skip-link:focus { top: 0; }
+
+    /* ── Card ──────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 40px 36px;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+
+    /* ── Branding ──────────────────────────────────────────────────────── */
+    .brand {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    .brand-logo {
+      width: 48px; height: 48px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 14px;
+      box-shadow: 0 4px 16px rgba(124,58,237,0.35);
+    }
+    .brand-logo svg { width: 28px; height: 28px; color: #fff; }
+    .brand h1 {
+      font-size: 22px; font-weight: 700; letter-spacing: -0.3px;
+      color: var(--text);
+    }
+    .brand h1 span { color: var(--accent2); }
+    .brand p { font-size: 13px; color: var(--text2); margin-top: 4px; }
+
+    /* ── Form ──────────────────────────────────────────────────────────── */
+    form { display: flex; flex-direction: column; gap: 18px; }
+
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label {
+      font-size: 12px; font-weight: 600; color: var(--text2);
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+
+    .input-wrap { position: relative; display: flex; align-items: center; }
+    .input-wrap input {
+      width: 100%;
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 11px 44px 11px 14px;
+      font-size: 16px; /* prevents iOS zoom */
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .input-wrap input:focus {
+      border-color: var(--accent2);
+      box-shadow: 0 0 0 2px rgba(168,85,247,0.2);
+    }
+    .input-wrap input::placeholder { color: var(--text2); opacity: 0.6; }
+
+    /* Eye toggle button */
+    .eye-btn {
+      position: absolute; right: 12px;
+      background: none; border: none; cursor: pointer;
+      color: var(--text2); padding: 4px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 4px; transition: color 0.15s;
+    }
+    .eye-btn:hover { color: var(--text); }
+    .eye-btn:focus-visible {
+      outline: 2px solid var(--accent2); outline-offset: 2px;
+    }
+    .eye-btn svg { width: 18px; height: 18px; }
+
+    /* Error message */
+    .field-error {
+      font-size: 12px; color: var(--red);
+      min-height: 16px; display: none;
+    }
+    .field-error.visible { display: block; }
+
+    /* Remember me */
+    .remember-row {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 13px; color: var(--text2);
+    }
+    .remember-row input[type="checkbox"] {
+      width: 15px; height: 15px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .remember-row label { cursor: pointer; }
+
+    /* Submit button */
+    .submit-btn {
+      width: 100%;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border: none; border-radius: 8px;
+      padding: 12px;
+      font-size: 15px; font-weight: 600; color: #fff;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .submit-btn:hover { opacity: 0.9; }
+    .submit-btn:active { transform: scale(0.99); }
+    .submit-btn:focus-visible { outline: 2px solid var(--accent2); outline-offset: 2px; }
+    .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Countdown message */
+    .rate-limit-msg {
+      font-size: 13px; color: var(--red);
+      text-align: center; display: none;
+    }
+    .rate-limit-msg.visible { display: block; }
+
+    /* ── Shake animation ───────────────────────────────────────────────── */
+    @keyframes shake {
+      0%  { transform: translateX(0); }
+      15% { transform: translateX(-6px); }
+      30% { transform: translateX(6px); }
+      45% { transform: translateX(-5px); }
+      60% { transform: translateX(5px); }
+      75% { transform: translateX(-3px); }
+      90% { transform: translateX(3px); }
+      100%{ transform: translateX(0); }
+    }
+    .shake { animation: shake 0.5s ease; }
+
+    /* ── Focus ring globals ────────────────────────────────────────────── */
+    :focus-visible { outline: 2px solid var(--accent2); outline-offset: 2px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <a href="#login-form" class="skip-link">Skip to sign-in form</a>
+
+  <main class="card" aria-label="Sign in to JClaw">
+    <div class="brand" aria-hidden="true">
+      <div class="brand-logo">
+        <!-- Claw / diamond icon -->
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 2L4 7v10l8 5 8-5V7l-8-5zm0 2.18L18 8v8l-6 3.82L6 16V8l6-3.82z"/>
+          <path d="M12 8a4 4 0 100 8 4 4 0 000-8zm0 2a2 2 0 110 4 2 2 0 010-4z" opacity="0.7"/>
+        </svg>
+      </div>
+      <h1>J<span>Claw</span></h1>
+      <p>Sign in to your dashboard</p>
+    </div>
+
+    <form id="login-form" novalidate>
+      <div class="field">
+        <label for="password">Password</label>
+        <div class="input-wrap">
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="Enter your password"
+            required
+            aria-required="true"
+            aria-describedby="password-error"
+            autofocus
+          />
+          <button
+            type="button"
+            class="eye-btn"
+            id="eye-toggle"
+            aria-label="Show password"
+            aria-pressed="false"
+          >
+            <!-- Eye open -->
+            <svg id="eye-open" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            <!-- Eye closed (hidden by default) -->
+            <svg id="eye-closed" style="display:none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.477 0-8.268-2.943-9.542-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.477 0 8.268 2.943 9.542 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+            </svg>
+          </button>
+        </div>
+        <span id="password-error" class="field-error" role="alert" aria-live="assertive"></span>
+      </div>
+
+      <div class="remember-row">
+        <input type="checkbox" id="remember-me" name="rememberMe" />
+        <label for="remember-me">Remember me for 30 days</label>
+      </div>
+
+      <div id="rate-limit-msg" class="rate-limit-msg" role="status" aria-live="polite"></div>
+
+      <button type="submit" class="submit-btn" id="submit-btn">
+        Sign in
+      </button>
+    </form>
+  </main>
+
+  <script>
+    var form = document.getElementById('login-form');
+    var pwInput = document.getElementById('password');
+    var eyeToggle = document.getElementById('eye-toggle');
+    var eyeOpen = document.getElementById('eye-open');
+    var eyeClosed = document.getElementById('eye-closed');
+    var pwError = document.getElementById('password-error');
+    var rateLimitMsg = document.getElementById('rate-limit-msg');
+    var submitBtn = document.getElementById('submit-btn');
+    var rememberMe = document.getElementById('remember-me');
+
+    // ── Show/hide password toggle ───────────────────────────────────────
+    eyeToggle.addEventListener('click', function() {
+      var showing = pwInput.type === 'text';
+      pwInput.type = showing ? 'password' : 'text';
+      eyeOpen.style.display = showing ? '' : 'none';
+      eyeClosed.style.display = showing ? 'none' : '';
+      eyeToggle.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+      eyeToggle.setAttribute('aria-pressed', showing ? 'false' : 'true');
+    });
+
+    // ── Shake helper ───────────────────────────────────────────────────
+    function shakeForm() {
+      form.classList.remove('shake');
+      // Reflow to re-trigger animation
+      void form.offsetWidth;
+      form.classList.add('shake');
+      form.addEventListener('animationend', function() {
+        form.classList.remove('shake');
+      }, { once: true });
+    }
+
+    // ── Show field error ───────────────────────────────────────────────
+    function showError(msg) {
+      pwError.textContent = msg;
+      pwError.classList.add('visible');
+      pwInput.setAttribute('aria-invalid', 'true');
+    }
+
+    function clearError() {
+      pwError.textContent = '';
+      pwError.classList.remove('visible');
+      pwInput.removeAttribute('aria-invalid');
+    }
+
+    // ── Rate limit countdown ───────────────────────────────────────────
+    var countdownTimer = null;
+    function startCountdown(seconds) {
+      if (countdownTimer) clearInterval(countdownTimer);
+      submitBtn.disabled = true;
+      function tick() {
+        if (seconds <= 0) {
+          clearInterval(countdownTimer);
+          countdownTimer = null;
+          submitBtn.disabled = false;
+          rateLimitMsg.textContent = '';
+          rateLimitMsg.classList.remove('visible');
+          return;
+        }
+        rateLimitMsg.textContent = 'Too many attempts. Try again in ' + seconds + ' second' + (seconds !== 1 ? 's' : '') + '.';
+        rateLimitMsg.classList.add('visible');
+        seconds--;
+      }
+      tick();
+      countdownTimer = setInterval(tick, 1000);
+    }
+
+    // ── Form submit ────────────────────────────────────────────────────
+    form.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      clearError();
+
+      var password = pwInput.value;
+      if (!password) {
+        showError('Password is required.');
+        shakeForm();
+        pwInput.focus();
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Signing in…';
+
+      try {
+        var body = new URLSearchParams({ password: password });
+        if (rememberMe.checked) body.append('rememberMe', 'true');
+
+        var res = await fetch('/setup/api/login', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body.toString()
+        });
+
+        if (res.ok) {
+          // Redirect to dashboard or return URL
+          var params = new URLSearchParams(location.search);
+          window.location.href = params.get('next') || '/dashboard';
+          return;
+        }
+
+        if (res.status === 429) {
+          var retryAfter = parseInt(res.headers.get('Retry-After') || '60', 10);
+          startCountdown(retryAfter);
+          shakeForm();
+          showError('Too many failed attempts.');
+        } else {
+          var data = null;
+          try { data = await res.json(); } catch(_) {}
+          var msg = (data && data.error) ? data.error : 'Incorrect password. Please try again.';
+          showError(msg);
+          shakeForm();
+          pwInput.value = '';
+          pwInput.focus();
+        }
+      } catch (err) {
+        showError('Network error. Please try again.');
+        shakeForm();
+      } finally {
+        if (!countdownTimer) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Sign in';
+        } else {
+          submitBtn.textContent = 'Sign in';
+        }
+      }
+    });
+
+    // Clear error on typing
+    pwInput.addEventListener('input', clearError);
+  </script>
+</body>
+</html>

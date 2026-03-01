@@ -29,6 +29,7 @@
 <button
   class="inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-all duration-200 ease-out cursor-pointer {variantClasses[variant]} {sizeClasses[size]} {isDisabled ? 'opacity-50 cursor-not-allowed' : ''} {className}"
   disabled={isDisabled}
+  aria-disabled={isDisabled}
   onclick={onclick}
 >
   {#if loading}

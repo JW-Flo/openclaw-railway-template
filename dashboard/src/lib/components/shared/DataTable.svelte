@@ -18,6 +18,7 @@
         <tr>
           {#each columns as col}
             <th
+              scope="col"
               class="text-left px-4 py-3 text-xs font-medium text-text-3 uppercase tracking-wider border-b border-border bg-surface-2/50"
               style={col.width ? `width: ${col.width}` : ''}
             >

@@ -17,6 +17,7 @@
 
   let dialogEl = $state(null);
   let previousFocus = $state(null);
+  let titleId = `modal-title-${Math.random().toString(36).slice(2, 9)}`;
 
   const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
@@ -71,10 +72,10 @@
     class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 modal-overlay"
     onclick={handleOverlayClick}
   >
-    <div bind:this={dialogEl} class="bg-surface border border-border rounded-2xl shadow-2xl shadow-black/50 w-full {sizeClasses[size]} modal-content">
+    <div bind:this={dialogEl} role="dialog" aria-modal="true" aria-labelledby={titleId} class="bg-surface border border-border rounded-2xl shadow-2xl shadow-black/50 w-full {sizeClasses[size]} modal-content">
       <!-- Header -->
       <div class="flex items-center justify-between px-6 py-4 border-b border-border">
-        <h2 class="text-lg font-semibold text-text">{title}</h2>
+        <h2 id={titleId} class="text-lg font-semibold text-text">{title}</h2>
         <button
           class="text-text-3 hover:text-text transition-colors duration-150 cursor-pointer p-1 rounded-lg hover:bg-surface-2"
           onclick={() => open = false}
