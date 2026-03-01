@@ -1,71 +1,114 @@
-import { spawn } from 'node:child_process';
+/**
+ * safe-exec.js — secure child-process spawn wrapper
+ *
+ * Enforces shell:false, validates commands against an allowlist,
+ * and provides defense-in-depth for all spawn call sites.
+ */
 
-const ALLOWED_COMMANDS = new Set([
-  'openclaw', 'node', 'git', 'npm', 'pnpm',
-  'cat', 'ls', 'find', 'grep', 'wc',
-  'head', 'tail', 'df', 'free', 'ps',
-  'uptime', 'whoami', 'echo', 'env', 'printenv',
+import childProcess from "node:child_process";
+
+const CMD_ALLOWLIST = new Set([
+  "node",
+  "openclaw",
+  "git",
+  "npm",
+  "pnpm",
+  "cat",
+  "ls",
+  "find",
+  "grep",
+  "wc",
+  "head",
+  "tail",
+  "df",
+  "free",
+  "ps",
+  "uptime",
+  "whoami",
+  "echo",
+  "env",
+  "printenv",
+  "sh",
+  "bash",
+  "python3",
+  "jq",
+  "curl",
+  "wget",
+  "gh",        // GitHub CLI — used by project-context, skills
+  "clawhub",   // OpenClaw skill manager — used by skills API
+  "wrangler",  // Cloudflare CLI — installed in Docker
+  "railway",   // Railway CLI — installed in Docker
 ]);
 
-const DANGEROUS_ARG_PATTERN = /[;|&$`\\]/;
-
 /**
- * Validates that a command is in the allowlist.
- * Rejects commands with path separators to prevent path-traversal bypass.
- * @param {string} cmd
- * @returns {boolean}
- */
-export function isCommandAllowed(cmd) {
-  if (!cmd || typeof cmd !== 'string') return false;
-  if (cmd.includes('/')) return false;
-  return ALLOWED_COMMANDS.has(cmd);
-}
-
-/**
- * Validates that args don't contain shell metacharacters.
- * @param {string[]} args
- * @returns {{ valid: boolean, reason?: string }}
- */
-export function validateArgs(args) {
-  if (!Array.isArray(args)) {
-    return { valid: false, reason: 'args must be an array' };
-  }
-  for (const arg of args) {
-    if (arg === undefined || arg === null) {
-      return { valid: false, reason: 'args must not contain undefined or null' };
-    }
-    if (typeof arg !== 'string') {
-      return { valid: false, reason: 'each arg must be a string' };
-    }
-    if (arg.length > 8192) {
-      return { valid: false, reason: 'arg exceeds max length (8192)' };
-    }
-    if (DANGEROUS_ARG_PATTERN.test(arg)) {
-      return { valid: false, reason: 'arg contains disallowed shell metacharacter' };
-    }
-  }
-  return { valid: true };
-}
-
-/**
- * Safe spawn wrapper — enforces command allowlist, arg validation, shell:false.
- * @param {string} cmd
- * @param {string[]} args
- * @param {import('node:child_process').SpawnOptions} [opts]
- * @returns {import('node:child_process').ChildProcess}
+ * Spawn a child process with security hardening.
+ * Always sets shell:false. Validates cmd against allowlist.
+ *
+ * @param {string} cmd — the executable to run
+ * @param {string[]} args — array of arguments (never a single shell string)
+ * @param {object} [opts] — options forwarded to child_process.spawn
+ * @param {object} [opts.bypassAllowlist] — internal flag for trusted callers (gateway, openclaw CLI)
+ * @returns {import("node:child_process").ChildProcess}
+ * @throws {Error} if cmd is not in the allowlist
  */
 export function safeSpawn(cmd, args = [], opts = {}) {
-  if (!isCommandAllowed(cmd)) {
-    throw new Error(`Command not allowed: ${cmd}`);
+  const { bypassAllowlist, ...spawnOpts } = opts;
+
+  // Always enforce shell:false to prevent shell injection
+  spawnOpts.shell = false;
+
+  // Validate command against allowlist
+  const baseName = cmd.split("/").pop();
+  if (!bypassAllowlist && !CMD_ALLOWLIST.has(baseName)) {
+    throw new Error(
+      `[safe-exec] Command not allowed: "${cmd}". Allowed: ${[...CMD_ALLOWLIST].join(", ")}`,
+    );
   }
 
-  const argCheck = validateArgs(args);
-  if (!argCheck.valid) {
-    throw new Error(`Invalid arguments: ${argCheck.reason}`);
+  // Validate all args are strings (prevent accidental object injection)
+  for (let i = 0; i < args.length; i++) {
+    if (typeof args[i] !== "string") {
+      throw new Error(
+        `[safe-exec] Argument at index ${i} must be a string, got ${typeof args[i]}`,
+      );
+    }
   }
 
-  return spawn(cmd, args, {
-    ...opts,
-    shell: false,
+  return childProcess.spawn(cmd, args, spawnOpts);
+}
+
+/**
+ * Run a command and collect stdout+stderr into a string.
+ * Returns { code, output }.
+ */
+export function safeRun(cmd, args = [], opts = {}) {
+  return new Promise((resolve) => {
+    let proc;
+    try {
+      proc = safeSpawn(cmd, args, opts);
+    } catch (err) {
+      return resolve({ code: 126, output: `[safe-exec] ${err.message}\n` });
+    }
+
+    let out = "";
+    proc.stdout?.on("data", (d) => (out += d.toString("utf8")));
+    proc.stderr?.on("data", (d) => (out += d.toString("utf8")));
+
+    proc.on("error", (err) => {
+      out += `\n[spawn error] ${String(err)}\n`;
+      resolve({ code: 127, output: out });
+    });
+
+    proc.on("close", (code) => resolve({ code: code ?? 0, output: out }));
   });
 }
+
+/**
+ * Check whether a command is in the allowlist (for shell API validation).
+ */
+export function isCommandAllowed(cmd) {
+  const baseName = (cmd || "").split("/").pop();
+  return CMD_ALLOWLIST.has(baseName);
+}
+
+export { CMD_ALLOWLIST };

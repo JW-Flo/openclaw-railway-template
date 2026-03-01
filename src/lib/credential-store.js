@@ -1,138 +1,157 @@
-import { randomBytes, createCipheriv, createDecipheriv, pbkdf2Sync } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+/**
+ * credential-store.js — Encrypted credential storage
+ *
+ * AES-256-GCM encryption with PBKDF2-derived key.
+ * Credentials stored in a single encrypted blob at /data/.openclaw/credentials.enc.
+ */
 
-const ALGORITHM = 'aes-256-gcm';
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+
+const SALT_FILENAME = ".credential-salt";
+const STORE_FILENAME = "credentials.enc";
 const PBKDF2_ITERATIONS = 100_000;
-const KEY_LENGTH = 32;
-const IV_LENGTH = 12;
-const SALT_LENGTH = 32;
+const KEY_LENGTH = 32; // AES-256
+const IV_LENGTH = 12; // GCM standard
 const AUTH_TAG_LENGTH = 16;
 
 /**
- * Derives an AES-256 key from a password and salt using PBKDF2.
+ * Get or create the salt for key derivation.
  */
-function deriveKey(password, salt) {
-  return pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, KEY_LENGTH, 'sha512');
-}
-
-export class CredentialStore {
-  #storeDir;
-  #blobPath;
-  #saltPath;
-
-  /**
-   * @param {string} storeDir — directory for credentials.enc and .credential-salt
-   */
-  constructor(storeDir) {
-    this.#storeDir = storeDir;
-    this.#blobPath = join(storeDir, 'credentials.enc');
-    this.#saltPath = join(storeDir, '.credential-salt');
-  }
-
-  /**
-   * Get or create the salt file.
-   * @returns {Buffer}
-   */
-  #getSalt() {
-    if (existsSync(this.#saltPath)) {
-      return readFileSync(this.#saltPath);
-    }
-    mkdirSync(this.#storeDir, { recursive: true, mode: 0o700 });
-    const salt = randomBytes(SALT_LENGTH);
-    writeFileSync(this.#saltPath, salt, { mode: 0o600 });
+function getSalt(stateDir) {
+  const saltPath = path.join(stateDir, SALT_FILENAME);
+  try {
+    return Buffer.from(fs.readFileSync(saltPath, "utf8").trim(), "hex");
+  } catch {
+    const salt = crypto.randomBytes(32);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(saltPath, salt.toString("hex"), { mode: 0o600 });
     return salt;
   }
+}
 
-  /**
-   * Load the encrypted blob and decrypt it.
-   * @param {string} password
-   * @returns {Record<string, string>}
-   */
-  #load(password) {
-    if (!existsSync(this.#blobPath)) {
-      return {};
-    }
-    const raw = readFileSync(this.#blobPath);
-    if (raw.length === 0) return {};
+/**
+ * Derive an AES-256 key from a password using PBKDF2.
+ */
+function deriveKey(password, salt) {
+  return crypto.pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, KEY_LENGTH, "sha512");
+}
 
-    const salt = this.#getSalt();
-    const key = deriveKey(password, salt);
+/**
+ * Encrypt plaintext with AES-256-GCM.
+ * Returns Buffer: [IV (12 bytes)][authTag (16 bytes)][ciphertext]
+ */
+function encryptBuffer(key, plaintext) {
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return Buffer.concat([iv, authTag, encrypted]);
+}
 
-    const iv = raw.subarray(0, IV_LENGTH);
-    const authTag = raw.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
-    const ciphertext = raw.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
+/**
+ * Decrypt an AES-256-GCM encrypted buffer.
+ */
+function decryptBuffer(key, data) {
+  const iv = data.subarray(0, IV_LENGTH);
+  const authTag = data.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
+  const ciphertext = data.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(authTag);
+  return decipher.update(ciphertext, null, "utf8") + decipher.final("utf8");
+}
 
-    const decipher = createDecipheriv(ALGORITHM, key, iv);
-    decipher.setAuthTag(authTag);
-
-    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-    return JSON.parse(decrypted.toString('utf8'));
+/**
+ * Read the encrypted credential store. Returns a plain object or empty object.
+ */
+function readStore(stateDir, key) {
+  const storePath = path.join(stateDir, STORE_FILENAME);
+  try {
+    const raw = fs.readFileSync(storePath);
+    const json = decryptBuffer(key, raw);
+    return JSON.parse(json);
+  } catch (err) {
+    // Only treat "file not found" as empty store; re-throw to prevent silent data loss
+    if (err?.code === "ENOENT") return {};
+    throw err;
   }
+}
 
-  /**
-   * Encrypt and write the store to disk.
-   * @param {string} password
-   * @param {Record<string, string>} data
-   */
-  #save(password, data) {
-    const salt = this.#getSalt();
-    const key = deriveKey(password, salt);
-    const iv = randomBytes(IV_LENGTH);
+/**
+ * Write the credential store (encrypt and persist).
+ */
+function writeStore(stateDir, key, data) {
+  const storePath = path.join(stateDir, STORE_FILENAME);
+  const tmpPath = storePath + ".tmp";
+  const encrypted = encryptBuffer(key, JSON.stringify(data));
+  fs.writeFileSync(tmpPath, encrypted, { mode: 0o600 });
+  fs.renameSync(tmpPath, storePath);
+}
 
-    const cipher = createCipheriv(ALGORITHM, key, iv);
-    const plaintext = Buffer.from(JSON.stringify(data), 'utf8');
-    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-    const authTag = cipher.getAuthTag();
+/**
+ * Create a CredentialStore instance bound to a specific state directory and password.
+ */
+export function createCredentialStore(stateDir, password) {
+  const salt = getSalt(stateDir);
+  const key = deriveKey(password, salt);
 
-    mkdirSync(this.#storeDir, { recursive: true, mode: 0o700 });
-    const blob = Buffer.concat([iv, authTag, ciphertext]);
-    writeFileSync(this.#blobPath, blob, { mode: 0o600 });
-  }
+  return {
+    /**
+     * Store a credential under a key name.
+     */
+    encrypt(name, value) {
+      const store = readStore(stateDir, key);
+      store[name] = value;
+      writeStore(stateDir, key, store);
+    },
 
-  /**
-   * Encrypt and store a credential.
-   * @param {string} credKey
-   * @param {string} value
-   * @param {string} password
-   */
-  encrypt(credKey, value, password) {
-    const data = this.#load(password);
-    data[credKey] = value;
-    this.#save(password, data);
-  }
+    /**
+     * Retrieve a credential by key name. Returns null if not found.
+     */
+    decrypt(name) {
+      const store = readStore(stateDir, key);
+      return store[name] ?? null;
+    },
 
-  /**
-   * Decrypt and retrieve a credential.
-   * @param {string} credKey
-   * @param {string} password
-   * @returns {string | undefined}
-   */
-  decrypt(credKey, password) {
-    const data = this.#load(password);
-    return data[credKey];
-  }
+    /**
+     * List all stored credential key names.
+     */
+    listKeys() {
+      const store = readStore(stateDir, key);
+      return Object.keys(store);
+    },
 
-  /**
-   * List all stored credential key names.
-   * @param {string} password
-   * @returns {string[]}
-   */
-  listKeys(password) {
-    const data = this.#load(password);
-    return Object.keys(data);
-  }
+    /**
+     * Re-encrypt the entire store with a new password.
+     */
+    reEncrypt(newPassword) {
+      const store = readStore(stateDir, key);
+      const newSalt = crypto.randomBytes(32);
+      const saltPath = path.join(stateDir, SALT_FILENAME);
+      fs.writeFileSync(saltPath, newSalt.toString("hex"), { mode: 0o600 });
+      const newKey = deriveKey(newPassword, newSalt);
+      writeStore(stateDir, newKey, store);
+      // Return a new store bound to the new key
+      return createCredentialStore(stateDir, newPassword);
+    },
 
-  /**
-   * Re-encrypt all credentials with a new password.
-   * @param {string} oldPassword
-   * @param {string} newPassword
-   */
-  reEncrypt(oldPassword, newPassword) {
-    const data = this.#load(oldPassword);
-    // Generate a new salt for the new password
-    const newSalt = randomBytes(SALT_LENGTH);
-    writeFileSync(this.#saltPath, newSalt);
-    this.#save(newPassword, data);
-  }
+    /**
+     * Check if the store has any credentials.
+     */
+    hasCredentials() {
+      const storePath = path.join(stateDir, STORE_FILENAME);
+      return fs.existsSync(storePath);
+    },
+  };
+}
+
+/**
+ * Timing-safe password comparison using SHA-256 hashing + timingSafeEqual.
+ */
+export function safePasswordCompare(input, expected) {
+  if (!input || !expected) return false;
+  const inputHash = crypto.createHash("sha256").update(input).digest();
+  const expectedHash = crypto.createHash("sha256").update(expected).digest();
+  return crypto.timingSafeEqual(inputHash, expectedHash);
 }

@@ -1,34 +1,37 @@
-import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'node:fs';
-import { join, dirname, relative } from 'node:path';
+/**
+ * bootstrap-guard.js — Workspace bootstrap integrity verification
+ *
+ * Computes SHA-256 hashes of workspace template files and compares
+ * them against a stored manifest to detect unauthorized modifications.
+ */
+
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+
+const MANIFEST_FILENAME = "bootstrap-manifest.json";
 
 /**
- * Compute SHA-256 hash of a file.
- * @param {string} filePath
- * @returns {string}
+ * Compute SHA-256 hash of a file's contents.
  */
-export function hashFile(filePath) {
-  const content = readFileSync(filePath);
-  return createHash('sha256').update(content).digest('hex');
+function hashFile(filePath) {
+  const content = fs.readFileSync(filePath);
+  return crypto.createHash("sha256").update(content).digest("hex");
 }
 
 /**
- * Recursively walk a directory and return all file paths matching extensions.
- * @param {string} dir
- * @param {string[]} extensions
- * @returns {string[]}
+ * Recursively find all .md files in a directory.
  */
-function walkDir(dir, extensions) {
+function findMarkdownFiles(dir) {
   const results = [];
-  if (!existsSync(dir)) return results;
+  if (!fs.existsSync(dir)) return results;
 
-  const entries = readdirSync(dir);
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
-    const fullPath = join(dir, entry);
-    const stat = statSync(fullPath);
-    if (stat.isDirectory()) {
-      results.push(...walkDir(fullPath, extensions));
-    } else if (extensions.some((ext) => entry.endsWith(ext))) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...findMarkdownFiles(fullPath));
+    } else if (entry.name.endsWith(".md")) {
       results.push(fullPath);
     }
   }
@@ -36,85 +39,109 @@ function walkDir(dir, extensions) {
 }
 
 /**
- * Compute a manifest of file hashes for a workspace directory.
- * @param {string} workspaceDir
- * @returns {Record<string, string>} — relative path → SHA-256 hash
+ * Build a manifest of {relativePath: sha256Hash} for all .md files
+ * in the workspace directory.
  */
-export function computeManifest(workspaceDir) {
-  const files = walkDir(workspaceDir, ['.md', 'SKILL.md']);
+function buildManifest(workspaceDir) {
+  const files = findMarkdownFiles(workspaceDir);
   const manifest = {};
-  for (const f of files) {
-    const rel = relative(workspaceDir, f);
-    manifest[rel] = hashFile(f);
+  for (const filePath of files) {
+    const relPath = path.relative(workspaceDir, filePath);
+    manifest[relPath] = hashFile(filePath);
   }
   return manifest;
 }
 
 /**
- * Save a manifest to disk.
- * @param {string} manifestPath
- * @param {Record<string, string>} manifest
+ * Read the stored manifest from the state directory.
  */
-export function saveManifest(manifestPath, manifest) {
-  mkdirSync(dirname(manifestPath), { recursive: true });
-  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-}
-
-/**
- * Load a manifest from disk.
- * @param {string} manifestPath
- * @returns {Record<string, string> | null}
- */
-export function loadManifest(manifestPath) {
-  if (!existsSync(manifestPath)) return null;
+function readManifest(stateDir) {
+  const manifestPath = path.join(stateDir, MANIFEST_FILENAME);
   try {
-    return JSON.parse(readFileSync(manifestPath, 'utf8'));
+    return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   } catch {
     return null;
   }
 }
 
 /**
- * Verify workspace integrity against a saved manifest.
- * @param {string} workspaceDir
- * @param {string} manifestPath
- * @returns {{ verified: boolean, mismatches: Array<{ file: string, expected: string, actual: string }> }}
+ * Write the manifest to the state directory.
  */
-export function verifyIntegrity(workspaceDir, manifestPath) {
-  const saved = loadManifest(manifestPath);
-  if (!saved) {
-    return { verified: false, mismatches: [{ file: '(manifest)', expected: 'exists', actual: 'missing' }] };
-  }
-
-  const current = computeManifest(workspaceDir);
-  const mismatches = [];
-
-  // Check saved files for changes or deletions
-  for (const [file, expectedHash] of Object.entries(saved)) {
-    const actualHash = current[file];
-    if (actualHash !== expectedHash) {
-      mismatches.push({ file, expected: expectedHash, actual: actualHash || 'deleted' });
-    }
-  }
-
-  // Detect new files not in the original manifest
-  for (const file of Object.keys(current)) {
-    if (!(file in saved)) {
-      mismatches.push({ file, expected: 'absent', actual: 'added' });
-    }
-  }
-
-  return { verified: mismatches.length === 0, mismatches };
+function writeManifest(stateDir, manifest) {
+  const manifestPath = path.join(stateDir, MANIFEST_FILENAME);
+  const tmpPath = manifestPath + ".tmp";
+  fs.writeFileSync(tmpPath, JSON.stringify(manifest, null, 2));
+  fs.renameSync(tmpPath, manifestPath);
 }
 
 /**
- * Rebaseline: recompute and save a fresh manifest.
- * @param {string} workspaceDir
- * @param {string} manifestPath
- * @returns {Record<string, string>}
+ * Verify workspace files against stored manifest.
+ * Returns { verified: bool, mismatches: [{file, expected, actual}], newFiles: [string], missingFiles: [string] }
  */
-export function rebaseline(workspaceDir, manifestPath) {
-  const manifest = computeManifest(workspaceDir);
-  saveManifest(manifestPath, manifest);
+export function verifyBootstrap(stateDir, workspaceDir) {
+  const stored = readManifest(stateDir);
+  if (!stored) {
+    return { verified: true, mismatches: [], newFiles: [], missingFiles: [], noManifest: true };
+  }
+
+  const current = buildManifest(workspaceDir);
+  const mismatches = [];
+  const missingFiles = [];
+  const newFiles = [];
+
+  // Check all files in stored manifest
+  for (const [relPath, expectedHash] of Object.entries(stored)) {
+    if (!(relPath in current)) {
+      missingFiles.push(relPath);
+    } else if (current[relPath] !== expectedHash) {
+      mismatches.push({ file: relPath, expected: expectedHash, actual: current[relPath] });
+    }
+  }
+
+  // Check for new files not in manifest
+  for (const relPath of Object.keys(current)) {
+    if (!(relPath in stored)) {
+      newFiles.push(relPath);
+    }
+  }
+
+  const verified = mismatches.length === 0 && missingFiles.length === 0;
+
+  if (!verified) {
+    console.error(`[SECURITY-ALERT] Bootstrap integrity check failed!`);
+    for (const m of mismatches) {
+      console.error(`[SECURITY-ALERT] Modified: ${m.file} (expected ${m.expected.slice(0, 12)}..., got ${m.actual.slice(0, 12)}...)`);
+    }
+    for (const f of missingFiles) {
+      console.error(`[SECURITY-ALERT] Missing: ${f}`);
+    }
+  }
+
+  return { verified, mismatches, newFiles, missingFiles, noManifest: false };
+}
+
+/**
+ * Create or update the bootstrap manifest from the current workspace state.
+ */
+export function rebaselineManifest(stateDir, workspaceDir) {
+  const manifest = buildManifest(workspaceDir);
+  writeManifest(stateDir, manifest);
+  console.log(`[bootstrap-guard] Manifest updated with ${Object.keys(manifest).length} files`);
   return manifest;
+}
+
+/**
+ * Initialize bootstrap guard on boot:
+ * - If no manifest exists, create one (first boot after this feature is deployed)
+ * - If manifest exists, verify and report
+ */
+export function initBootstrapGuard(stateDir, workspaceDir) {
+  const existing = readManifest(stateDir);
+  if (!existing) {
+    // First boot with bootstrap guard — create initial manifest
+    console.log("[bootstrap-guard] No manifest found, creating initial baseline...");
+    rebaselineManifest(stateDir, workspaceDir);
+    return { verified: true, mismatches: [], newFiles: [], missingFiles: [], firstRun: true };
+  }
+  return verifyBootstrap(stateDir, workspaceDir);
 }
