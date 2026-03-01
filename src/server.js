@@ -4147,6 +4147,7 @@ app.get("/setup/api/logs/export", requireSetupAuth, async (req, res) => {
   }
 
   const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  res.setHeader("Cache-Control", "no-store");
 
   if (format === "text") {
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
