@@ -242,6 +242,9 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
   display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;
   align-items: center;
 }
+.log-export-group {
+  display: flex; gap: 4px; margin-left: 4px;
+}
 .log-filters input, .log-filters select {
   width: auto; min-width: 120px;
 }
@@ -413,7 +416,14 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
       <div class="card"><h3>Memory</h3><div class="value" id="ov-memory"><span class="spinner"></span></div></div>
     </div>
     <div class="table-wrap">
-      <h3>Recent Gateway Logs</h3>
+      <h3 style="display:flex;align-items:center;justify-content:space-between">
+        Recent Gateway Logs
+        <span class="log-export-group" style="font-weight:normal">
+          <button class="btn sm" id="btn-export-debug-json" title="Download full debug + logs as JSON">Export JSON</button>
+          <button class="btn sm" id="btn-export-debug-text" title="Download full debug + logs as text">Export TXT</button>
+          <button class="btn sm" id="btn-copy-gateway-logs" title="Copy gateway logs to clipboard">Copy</button>
+        </span>
+      </h3>
       <div id="ov-logs" style="padding:10px;font-family:var(--mono);font-size:11px;color:var(--text2);max-height:220px;overflow-y:auto;white-space:pre-wrap;">Loading...</div>
     </div>
   </div>
@@ -567,6 +577,11 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
       <select id="log-type-filter"><option value="">All types</option></select>
       <select id="log-user-filter"><option value="">All users</option></select>
       <button class="btn sm" id="btn-refresh-logs">Refresh</button>
+      <div class="log-export-group">
+        <button class="btn sm" id="btn-export-json" title="Download all logs as JSON">Export JSON</button>
+        <button class="btn sm" id="btn-export-text" title="Download all logs as plain text">Export TXT</button>
+        <button class="btn sm" id="btn-copy-logs" title="Copy logs to clipboard for sharing">Copy</button>
+      </div>
       <span style="font-size:11px;color:var(--text2);margin-left:auto" id="log-count"></span>
     </div>
     <div class="table-wrap">
@@ -1091,6 +1106,46 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
   document.getElementById("log-search").addEventListener("input", debounce(loadActivityLog, 300));
   document.getElementById("log-type-filter").addEventListener("change", loadActivityLog);
   document.getElementById("log-user-filter").addEventListener("change", loadActivityLog);
+
+  // ── Log Export / Download / Share ────────────────────────────────────
+  function downloadFile(name, content, mime) {
+    var blob = new Blob([content], { type: mime });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  }
+
+  function triggerExport(format, include) {
+    var url = "/setup/api/logs/export?format=" + format + "&include=" + (include || "all");
+    window.location.href = url;
+  }
+
+  async function copyLogsToClipboard(include) {
+    try {
+      var resp = await fetch("/setup/api/logs/export?format=text&include=" + (include || "all"), {
+        credentials: "include"
+      });
+      var text = await resp.text();
+      await navigator.clipboard.writeText(text);
+      showToast("Logs copied to clipboard", "success");
+    } catch {
+      showToast("Failed to copy logs", "error");
+    }
+  }
+
+  // Activity tab export buttons
+  document.getElementById("btn-export-json").addEventListener("click", function() { triggerExport("json", "all"); });
+  document.getElementById("btn-export-text").addEventListener("click", function() { triggerExport("text", "all"); });
+  document.getElementById("btn-copy-logs").addEventListener("click", function() { copyLogsToClipboard("all"); });
+
+  // Overview tab gateway log export buttons
+  document.getElementById("btn-export-debug-json").addEventListener("click", function() { triggerExport("json", "all"); });
+  document.getElementById("btn-export-debug-text").addEventListener("click", function() { triggerExport("text", "all"); });
+  document.getElementById("btn-copy-gateway-logs").addEventListener("click", function() { copyLogsToClipboard("gateway"); });
 
   function debounce(fn, ms) {
     var timer;
