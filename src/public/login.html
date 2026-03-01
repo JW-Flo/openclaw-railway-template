@@ -325,22 +325,28 @@
         var body = new URLSearchParams({ password: password });
         if (rememberMe.checked) body.append('rememberMe', 'true');
 
-        var res = await fetch('/setup/api/login', {
+        var res = await fetch('/setup/api/auth/login', {
           method: 'POST',
           credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: body.toString()
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: password })
         });
 
         if (res.ok) {
           // Redirect to dashboard or return URL
           var params = new URLSearchParams(location.search);
-          window.location.href = params.get('next') || '/dashboard';
+          var next = params.get('next');
+          if (next && next.startsWith('/') && !next.startsWith('//')) {
+            window.location.href = next;
+          } else {
+            window.location.href = '/dashboard';
+          }
           return;
         }
 
         if (res.status === 429) {
-          var retryAfter = parseInt(res.headers.get('Retry-After') || '60', 10);
+          var retryAfterRaw = parseInt(res.headers.get('Retry-After') || '60', 10);
+          var retryAfter = Number.isFinite(retryAfterRaw) && retryAfterRaw > 0 ? retryAfterRaw : 60;
           startCountdown(retryAfter);
           shakeForm();
           showError('Too many failed attempts.');

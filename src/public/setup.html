@@ -252,7 +252,7 @@
 </head>
 <body class="bg-neutral-100 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 min-h-screen font-sans" x-data="setupApp()">
   <a href="#main-content" class="skip-link">Skip to main content</a>
-  <div id="main-content" class="max-w-3xl mx-auto px-4 py-12 min-w-[400px]">
+  <div id="main-content" tabindex="-1" class="max-w-3xl mx-auto px-4 py-12 sm:min-w-[400px]">
     <div class="flex justify-center mb-6" aria-hidden="true">
       <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
@@ -380,7 +380,7 @@
 
             <div>
               <label for="setup-auth-secret" class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">API Key / Token</label>
-              <input id="setup-auth-secret" x-model="authSecret" type="password" placeholder="Paste your API key or token" autocomplete="current-password" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
+              <input id="setup-auth-secret" x-model="authSecret" type="password" placeholder="Paste your API key or token" autocomplete="off" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
             </div>
 
             <div>

@@ -395,7 +395,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
 </header>
 
 <!-- News Ticker Banner -->
-<div class="ticker-bar" id="ticker-bar" role="marquee" aria-label="Live activity feed">
+<div class="ticker-bar" id="ticker-bar" role="region" aria-label="Live activity feed">
   <div class="ticker-label" aria-hidden="true">LIVE</div>
   <div class="ticker-track">
     <div class="ticker-content" id="ticker-content" aria-live="polite"></div>
@@ -412,7 +412,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
   <div class="tab" data-tab="activity" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-activity" id="tab-activity">Activity</div>
 </div>
 
-<div class="content" id="main-content">
+<div class="content" id="main-content" tabindex="-1">
   <!-- Overview Tab -->
   <div class="panel active" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
     <div class="cards" id="overview-cards">
@@ -653,7 +653,10 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     tab.addEventListener("keydown", function(e) {
       var tabList = Array.from(tabs);
       var idx = tabList.indexOf(tab);
-      if (e.key === "ArrowRight") {
+      if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+            e.preventDefault();
+            switchTab(tab.dataset.tab);
+          } else if (e.key === "ArrowRight") {
         e.preventDefault();
         tabList[(idx + 1) % tabList.length].focus();
         switchTab(tabList[(idx + 1) % tabList.length].dataset.tab);

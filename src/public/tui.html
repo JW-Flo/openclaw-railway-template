@@ -164,6 +164,8 @@
     const maxReconnectAttempts = 3;
 
     function connect() {
+      // Don't consume the TUI session on mobile devices
+      if (window.innerWidth < 768) return;
       setStatus('connecting', 'Connecting...');
       sessionStarted = false;
       loadingOverlay.style.display = 'flex';
