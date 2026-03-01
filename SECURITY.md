@@ -3,6 +3,8 @@
 > **Scope**: `JW-Flo/openclaw-railway-template`
 > **Last updated**: 2026-03-01
 
+> **Sprint 1 note**: Several modules described in this document (`src/middleware/session-auth.js`, `src/middleware/csrf.js`, `src/lib/safe-exec.js`, `src/lib/credential-store.js`, `src/lib/bootstrap-guard.js`, `src/alerts/**`) are being added by the concurrent QA remediation sprint (Opus-01 through Opus-03). Until those PRs are merged, the current setup wizard still uses HTTP Basic auth via `requireSetupAuth` in `src/server.js`. Items marked **[Sprint 1]** are planned/in-progress, not yet live in production.
+
 ---
 
 ## Security Architecture
@@ -11,16 +13,17 @@ The post-hardening security model layers multiple defenses across the request pa
 
 ### Authentication
 
-| Layer | Mechanism | Protects |
-|---|---|---|
-| `/setup` wizard | Session-based auth (replaces HTTP Basic) | Setup wizard, all `/setup/api/*` endpoints |
-| Dashboard API | Session cookie **or** bearer token **or** Basic auth (compat fallback) | All dashboard data endpoints |
-| Gateway proxy | Auto-injected Bearer token | All traffic forwarded to internal gateway |
-| Control UI bootstrap | Token written to `localStorage` via `/openclaw` bootstrap page | WebSocket + HTTP gateway connections |
+| Layer | Mechanism | Status | Protects |
+|---|---|---|---|
+| `/setup` wizard | Session-based auth replaces HTTP Basic | **[Sprint 1]** | Setup wizard, all `/setup/api/*` endpoints |
+| `/setup` wizard (current) | HTTP Basic auth via `requireSetupAuth` | Live | Setup wizard, all `/setup/api/*` endpoints |
+| Dashboard API | Session cookie **or** bearer token **or** Basic auth (compat fallback) | **[Sprint 1]** | All dashboard data endpoints |
+| Gateway proxy | Auto-injected Bearer token | Live | All traffic forwarded to internal gateway |
+| Control UI bootstrap | Token written to `localStorage` via `/openclaw` bootstrap page | Live | WebSocket + HTTP gateway connections |
 
-**Session auth** (`src/middleware/session-auth.js`): A `POST /setup/api/login` endpoint validates the password via `crypto.timingSafeEqual()` (constant-time comparison, preventing timing attacks) and issues an HTTP-only, SameSite=Strict session cookie. Session TTL defaults to 24 hours; "Remember me" extends to 30 days.
+**Session auth** (`src/middleware/session-auth.js`) **[Sprint 1]**: A `POST /setup/api/login` endpoint validates the password via `crypto.timingSafeEqual()` (constant-time comparison, preventing timing attacks) and issues an HTTP-only, SameSite=Strict session cookie. Session TTL defaults to 24 hours; "Remember me" extends to 30 days.
 
-**CSRF protection** (`src/middleware/csrf.js`): Double-submit cookie pattern. A `jclaw_csrf` cookie is set on every GET response; all `POST`/`PUT`/`DELETE` requests to `/setup/api/*` must echo it as a request header. Requests missing the header are rejected with `403 csrf_invalid`.
+**CSRF protection** (`src/middleware/csrf.js`) **[Sprint 1]**: Double-submit cookie pattern. A `jclaw_csrf` cookie is set on every GET response; all `POST`/`PUT`/`DELETE` requests to `/setup/api/*` must echo it as a request header. Requests missing the header are rejected with `403 csrf_invalid`.
 
 ### Rate Limiting Tiers
 

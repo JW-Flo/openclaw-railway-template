@@ -102,25 +102,31 @@ See also: CLAUDE.md → "Gateway unreachable after deploy" runbook.
 
 ### 4. Bootstrap tampered / integrity alert
 
-If `GET /setup/api/bootstrap-status` returns `{ "status": "tampered" }`:
+> **[Sprint 1 — not yet implemented]**: The `GET /setup/api/bootstrap-status` endpoint and `src/lib/bootstrap-guard.js` module are added by the QA remediation sprint (Opus-01). Until that PR is merged, use the manual steps below.
 
-1. **Stop traffic** — do not let the gateway run until this is resolved.
-2. **Audit the changed file**:
-   ```bash
-   curl -s -H "Authorization: Basic $AUTH" $BASE/setup/api/bootstrap-status
-   # Response includes which file changed and the hash delta
-   ```
-3. **Inspect the file content**:
+**Until `/setup/api/bootstrap-status` is available**, inspect bootstrap scripts manually:
+
+1. **Read the current bootstrap script**:
    ```bash
    curl -s -H "Authorization: Basic $AUTH" \
      "$BASE/setup/api/workspace/read?path=bootstrap.sh"
    ```
-4. If the change is expected (you deliberately edited the script): **rebaseline**:
+2. **Compare against your known-good version** (check git history for last intentional edit).
+3. If the script was unexpectedly modified: **treat as a security incident** — rotate all credentials, redeploy from a clean image, and notify your team.
+
+**After Sprint 1 lands** — `GET /setup/api/bootstrap-status` returns `{ "status": "verified" | "tampered", "changedFiles": [...] }`:
+
+1. **Stop traffic** — do not let the gateway run until resolved.
+2. **Audit the changed file**:
+   ```bash
+   curl -s -H "Authorization: Basic $AUTH" $BASE/setup/api/bootstrap-status
+   ```
+3. If the change is expected: **rebaseline**:
    ```bash
    curl -s -X POST -H "Authorization: Basic $AUTH" -H "Content-Type: application/json" \
      $BASE/setup/api/bootstrap-status -d '{"action":"rebaseline"}'
    ```
-5. If the change is unexpected: **treat as a security incident** — rotate all credentials, redeploy from a clean image, and notify your team.
+4. If unexpected: **treat as a security incident**.
 
 ---
 

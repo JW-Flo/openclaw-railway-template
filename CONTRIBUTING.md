@@ -68,20 +68,26 @@ npm run lint
 
 ## Testing
 
-Tests use [Vitest](https://vitest.dev).
+**Current** (before Sprint 1 lands): only a syntax check is available:
 
 ```bash
-# Run all tests
+npm run lint     # ESLint / node -c syntax check — the only automated check today
+```
+
+**After Sprint 1** (adds Vitest + `pnpm test` scripts): [Vitest](https://vitest.dev) will be the test runner.
+
+```bash
+# Run all tests  [Sprint 1]
 pnpm test
 
-# Run with coverage report
+# Run with coverage report  [Sprint 1]
 pnpm test:coverage
 
-# Run a specific file
+# Run a specific file  [Sprint 1]
 pnpm test test/lib/credential-store.test.js
 ```
 
-### Coverage thresholds
+### Coverage thresholds [Sprint 1]
 
 | Metric | Threshold |
 |---|---|
@@ -89,19 +95,19 @@ pnpm test test/lib/credential-store.test.js
 | Branches | 50% |
 | Functions | 60% |
 
-CI will fail if coverage drops below these thresholds.
+CI will fail if coverage drops below these thresholds once the test suite is in place.
 
-### Test file naming
+### Test file naming [Sprint 1]
 
 Tests mirror the source tree under `test/`:
 
 ```
-src/lib/credential-store.js       →  test/lib/credential-store.test.js
-src/middleware/csrf.js             →  test/middleware/csrf.test.js
-src/alerts/monitors/disk-monitor.js → test/alerts/monitors/disk-monitor.test.js
+src/lib/credential-store.js         →  test/lib/credential-store.test.js
+src/middleware/csrf.js               →  test/middleware/csrf.test.js
+src/alerts/monitors/disk-monitor.js →  test/alerts/monitors/disk-monitor.test.js
 ```
 
-### Adding tests
+### Adding tests [Sprint 1]
 
 - Test files use `.test.js` suffix.
 - Use `vi.mock()` to mock `fs`, `child_process`, and HTTP calls — never make real network requests in tests.
@@ -111,18 +117,43 @@ src/alerts/monitors/disk-monitor.js → test/alerts/monitors/disk-monitor.test.j
 
 ## Architecture Map
 
+### Current tree (before Sprint 1)
+
 ```
 openclaw-railway-template/
 ├── src/
 │   ├── server.js               Main Express entry point (monolith — minimize changes here)
-│   ├── lib/
+│   └── public/
+│       ├── setup.html          Setup wizard (static HTML)
+│       ├── dashboard.html      DevOps dashboard shell
+│       ├── loading.html        Splash/loading page
+│       └── tui.html            Web terminal page
+├── dashboard/                  SvelteKit dashboard app (compiled to static)
+│   └── src/lib/components/shared/  Shared UI components (Card, Modal, DataTable, …)
+├── workspace-templates/        Agent personality files + custom skills
+│   ├── IDENTITY.md / USER.md / MEMORY.md / TOOLS.md / AGENTS.md / SOUL.md
+│   └── skills/                 Custom skill definitions (deploy-pipeline, railway-ops, …)
+├── Dockerfile
+├── railway.toml
+└── entrypoint.sh
+```
+
+### Target tree (after Sprint 1 — QA remediation)
+
+Modules below marked **[Sprint 1]** are added by the concurrent Opus PRs. Once merged, `src/server.js` integration points delegate to these modules instead of doing everything inline.
+
+```
+openclaw-railway-template/
+├── src/
+│   ├── server.js               Main Express entry point (monolith — minimize changes here)
+│   ├── lib/                                           [Sprint 1]
 │   │   ├── safe-exec.js        Command allowlisting — ALL spawns go through here
 │   │   ├── credential-store.js AES-256-GCM encrypted credential storage
 │   │   └── bootstrap-guard.js  SHA-256 integrity check for bootstrap scripts
-│   ├── middleware/
+│   ├── middleware/                                    [Sprint 1]
 │   │   ├── csrf.js             Double-submit CSRF cookie protection
 │   │   └── session-auth.js     Session-based auth for /setup (replaces Basic auth)
-│   ├── alerts/
+│   ├── alerts/                                        [Sprint 1]
 │   │   ├── index.js            Alert system orchestrator (init + shutdown)
 │   │   ├── notifier.js         Send alerts to Telegram/Discord/Slack or stdout
 │   │   ├── scheduler.js        Interval-based scheduling (no cron lib dependency)
@@ -135,7 +166,7 @@ openclaw-railway-template/
 │   │       └── auth-monitor.js      Alert 5: Setup wizard brute force
 │   └── public/
 │       ├── setup.html          Setup wizard (static HTML)
-│       ├── login.html          Login page (session auth)
+│       ├── login.html          Login page (session auth) [Sprint 1]
 │       ├── dashboard.html      DevOps dashboard shell
 │       ├── loading.html        Splash/loading page
 │       └── tui.html            Web terminal page
@@ -144,13 +175,13 @@ openclaw-railway-template/
 ├── workspace-templates/        Agent personality files + custom skills
 │   ├── IDENTITY.md / USER.md / MEMORY.md / TOOLS.md / AGENTS.md / SOUL.md
 │   └── skills/                 Custom skill definitions (deploy-pipeline, railway-ops, …)
-├── test/                       Test files — mirrors src/ structure
+├── test/                       Test files — mirrors src/ [Sprint 1]
 ├── Dockerfile
 ├── railway.toml
 └── entrypoint.sh
 ```
 
-**`src/server.js` is the monolith** — it is intentionally large and handles the full request lifecycle, proxy setup, gateway management, and API endpoints. Prefer extending via the `src/lib/`, `src/middleware/`, and `src/alerts/` modules rather than adding new logic inline.
+**`src/server.js` is the monolith** — it is intentionally large and handles the full request lifecycle, proxy setup, gateway management, and API endpoints. Prefer extending via the `src/lib/`, `src/middleware/`, and `src/alerts/` modules (once Sprint 1 lands) rather than adding new logic inline.
 
 ---
 
