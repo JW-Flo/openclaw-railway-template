@@ -581,3 +581,61 @@ Common failure modes across the managed project fleet (from operational experien
 - All external API calls need timeouts + jittered retries
 - Audit log on every side-effecting step (order placement, cancel, credential change)
 - Treat any change to safety invariants (kill switch, max position, daily loss limit) as merge-blocking
+
+## New Module Map
+
+Files added by the QA remediation sprint (Sprint 1). All new logic lives in dedicated modules — `src/server.js` integration points are minimal.
+
+| File | Purpose |
+|---|---|
+| `src/lib/safe-exec.js` | Command allowlisting — **all child process spawns go through `safeSpawn()` here**. Never import `child_process` directly in new code. Allowlisted executables: `openclaw`, `git`, `gh`, `df`, `ps`, `journalctl`, `node`, `npm`, `pnpm`, `wrangler`, `railway`. |
+| `src/lib/credential-store.js` | AES-256-GCM encrypted credential storage. Reads/writes `${STATE_DIR}/credentials.enc.json`. Key derived via HKDF from gateway token. |
+| `src/lib/bootstrap-guard.js` | SHA-256 integrity check for `/data/workspace/bootstrap.sh` and other bootstrap scripts. Compares against manifest in `${STATE_DIR}/bootstrap-manifest.json`. Blocks startup if tampered. |
+| `src/middleware/csrf.js` | Double-submit cookie CSRF protection. Sets `jclaw_csrf` cookie; validates matching request header on all `POST`/`PUT`/`DELETE` to `/setup/api/*`. |
+| `src/middleware/session-auth.js` | Session-based auth for `/setup` (replaces HTTP Basic auth). Issues HTTP-only, SameSite=Strict cookie via `POST /setup/api/login`. Accepts session cookie, bearer token, or Basic auth (compat fallback). |
+| `src/alerts/index.js` | Alert system orchestrator — init, shutdown, config loading. |
+| `src/alerts/notifier.js` | Sends alerts to Telegram/Discord/Slack or stdout (`[SECURITY-ALERT]` prefix fallback). |
+| `src/alerts/scheduler.js` | Interval-based scheduling without external cron dependencies. |
+| `src/alerts/state.js` | Baseline storage + cooldown tracking in `${STATE_DIR}/alert-state.json`. |
+| `src/alerts/monitors/ssh-monitor.js` | Alert 1: failed SSH login detection via `auth.log` / `journalctl`. |
+| `src/alerts/monitors/disk-monitor.js` | Alert 2: periodic `df` parsing; warns at 85%, critical at 90%. |
+| `src/alerts/monitors/config-audit.js` | Alert 3: daily SHA-256 comparison of `openclaw.json`, `gateway.token`, `package.json`, Dockerfile, system files. |
+| `src/alerts/monitors/gateway-monitor.js` | Alert 4: hooks into the existing gateway `exit` event handler to alert on crashes. |
+| `src/alerts/monitors/auth-monitor.js` | Alert 5: setup wizard brute force — alerts after ≥5 failed logins from same IP in 60 s. |
+
+## Testing
+
+Tests use [Vitest](https://vitest.dev). Run with:
+
+```bash
+pnpm test                  # all tests
+pnpm test:coverage         # with coverage report
+```
+
+**Coverage thresholds** (CI enforced):
+
+| Metric | Threshold |
+|---|---|
+| Statements | 60% |
+| Branches | 50% |
+| Functions | 60% |
+
+**Test file naming**: `test/` mirrors `src/`. Example:
+- `src/lib/credential-store.js` → `test/lib/credential-store.test.js`
+- `src/middleware/csrf.js` → `test/middleware/csrf.test.js`
+
+Use `vi.mock()` for `fs`, `child_process`, and HTTP calls — no real network requests in tests.
+
+## Security Invariants
+
+These apply to every code change. PRs that violate them are blocked:
+
+1. **All spawns through `safeSpawn()`** — `src/lib/safe-exec.js`. Never `child_process.exec()` or shell string interpolation with user input.
+2. **All credentials through `credential-store`** — `src/lib/credential-store.js`. No API keys or tokens written as plaintext to `openclaw.json` in new code.
+3. **All password comparisons via `crypto.timingSafeEqual()`** — prevents timing-based enumeration.
+4. **CSRF token required for mutations** — `requireCsrf` middleware on all `POST`/`PUT`/`DELETE` under `/setup/api/*`.
+5. **No secrets in logs** — log presence (`"token: [set]"`), never value. No raw `Authorization` headers, cookies, or API keys in any log output.
+
+## Gotcha #25: safe-exec.js is the canonical spawn path
+
+`src/lib/safe-exec.js` is now the **only** approved way to spawn child processes anywhere in the codebase. It uses `child_process.spawn()` with array arguments (no shell interpolation) and enforces an executable allowlist. Direct imports of `child_process` in new files will fail the ESLint check. If you need to spawn a new binary, add it to the allowlist in `safe-exec.js` with a comment explaining why.
