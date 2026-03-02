@@ -1377,6 +1377,18 @@ async function startGateway() {
     console.warn(`[gateway] Could not check/fix gateway.mode: ${err.message}`);
   }
 
+  // Ensure allowedOrigins includes the Railway public URL so the Control UI WebSocket connects
+  try {
+    const pubDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
+    if (pubDomain) {
+      const origins = [`https://${pubDomain}`];
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "gateway.controlUi.allowedOrigins", JSON.stringify(origins)]));
+      console.log(`[gateway] config set allowedOrigins=${JSON.stringify(origins)} exit=${r.code}`);
+    }
+  } catch (err) {
+    console.warn(`[gateway] Could not set allowedOrigins: ${err.message}`);
+  }
+
   const args = [
     "gateway",
     "run",
@@ -1941,6 +1953,16 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       );
       extra += `[config] gateway.trustedProxies exit=${proxiesResult.code}\n`;
 
+      // Set allowedOrigins for Control UI WebSocket
+      const pubDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
+      if (pubDomain) {
+        const originsResult = await runCmd(
+          OPENCLAW_NODE,
+          clawArgs(["config", "set", "--json", "gateway.controlUi.allowedOrigins", JSON.stringify([`https://${pubDomain}`])]),
+        );
+        extra += `[config] gateway.controlUi.allowedOrigins exit=${originsResult.code}\n`;
+      }
+
       if (payload.model?.trim()) {
         extra += `[setup] Setting model to ${payload.model.trim()}...\n`;
         const modelResult = await runCmd(
@@ -2251,6 +2273,13 @@ app.post("/setup/api/switch-provider", requireSetupAuth, async (req, res) => {
     }
     const proxiesResult = await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "gateway.trustedProxies", '["127.0.0.1"]']));
     output += `\n[config] trustedProxies exit=${proxiesResult.code}`;
+
+    // Set allowedOrigins for Control UI WebSocket
+    const switchPubDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
+    if (switchPubDomain) {
+      const originsR = await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "gateway.controlUi.allowedOrigins", JSON.stringify([`https://${switchPubDomain}`])]));
+      output += `\n[config] allowedOrigins exit=${originsR.code}`;
+    }
 
     // Set model if provided
     if (model?.trim()) {
