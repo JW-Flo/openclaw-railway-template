@@ -1326,10 +1326,18 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     { type: "headline", text: "Dashboard Tip: Press Ctrl+K for Command Palette" },
   ];
 
-  document.getElementById("ticker-dismiss").addEventListener("click", function() {
-    document.getElementById("ticker-bar").classList.add("hidden");
-    localStorage.setItem("jclaw-ticker-hidden", "true");
-  });
+  var allowedTickerTypes = { signal: 1, trade: 1, position: 1, info: 1, headline: 1, status: 1 };
+
+  (function initTickerPersistence() {
+    var bar = document.getElementById("ticker-bar");
+    var dismiss = document.getElementById("ticker-dismiss");
+    if (!bar || !dismiss) return;
+    try { if (localStorage.getItem("jclaw-ticker-hidden") === "true") bar.classList.add("hidden"); } catch (e) { /* ignore */ }
+    dismiss.addEventListener("click", function() {
+      bar.classList.add("hidden");
+      try { localStorage.setItem("jclaw-ticker-hidden", "true"); } catch (e) { /* ignore */ }
+    });
+  })();
 
   function renderTicker(items, speed) {
     var content = document.getElementById("ticker-content");
@@ -1337,20 +1345,21 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     content.style.setProperty("--ticker-speed", dur);
     content.style.animationDuration = dur;
 
-    function buildItems(list) {
+    function buildItems(list, addLeadingSep) {
       var out = "";
       for (var i = 0; i < list.length; i++) {
         var item = list[i];
-        var typeClass = item.type || "info";
+        var rawType = ((item.type || "info") + "").toLowerCase();
+        var typeClass = allowedTickerTypes[rawType] ? rawType : "info";
         out += '<span class="ticker-item">';
-        if (i > 0) out += '<span class="ticker-sep">\u2022</span>';
-        out += '<span class="ticker-type ' + esc(typeClass) + '">' + esc(item.type || "info") + '</span> ' +
+        if (i > 0 || addLeadingSep) out += '<span class="ticker-sep">\u2022</span>';
+        out += '<span class="ticker-type ' + typeClass + '">' + esc(item.type || "info") + '</span> ' +
           esc(item.text || "") + '</span>';
       }
       return out;
     }
-    // Duplicate items for seamless infinite scroll loop
-    content.innerHTML = buildItems(items) + buildItems(items);
+    // Duplicate items for seamless infinite scroll loop (second copy gets leading separator)
+    content.innerHTML = buildItems(items, false) + buildItems(items, true);
   }
 
   // Render default headlines immediately so the ticker is always visible
