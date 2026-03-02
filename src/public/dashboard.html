@@ -280,24 +280,34 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
 
 /* ── News Ticker Banner ───────────────────────────────────────────────── */
 .ticker-bar {
-  background: var(--surface2); border-bottom: 1px solid var(--border);
-  overflow: hidden; height: 30px; position: relative;
+  background: linear-gradient(90deg, var(--surface2) 0%, var(--surface) 50%, var(--surface2) 100%);
+  border-bottom: 2px solid var(--accent);
+  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.15);
+  overflow: hidden; height: 38px; position: relative;
   display: flex; align-items: center;
 }
 .ticker-bar.hidden { display: none; }
 .ticker-label {
-  background: var(--accent); color: #fff; font-size: 10px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.5px;
-  padding: 0 10px; height: 100%; display: flex; align-items: center;
+  background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1px;
+  padding: 0 14px; height: 100%; display: flex; align-items: center;
   white-space: nowrap; z-index: 1; flex-shrink: 0;
+  position: relative;
 }
+.ticker-label::after {
+  content: ""; position: absolute; right: -6px; top: 50%; transform: translateY(-50%);
+  width: 8px; height: 8px; background: var(--green); border-radius: 50%;
+  animation: tickerPulse 2s ease-in-out infinite;
+}
+@keyframes tickerPulse { 0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--green); } 50% { opacity: 0.4; box-shadow: none; } }
 .ticker-track {
   flex: 1; overflow: hidden; position: relative; height: 100%;
-  mask-image: linear-gradient(90deg, transparent 0%, black 3%, black 97%, transparent 100%);
-  -webkit-mask-image: linear-gradient(90deg, transparent 0%, black 3%, black 97%, transparent 100%);
+  margin-left: 12px;
+  mask-image: linear-gradient(90deg, transparent 0%, black 2%, black 98%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, black 2%, black 98%, transparent 100%);
 }
 .ticker-content {
-  display: flex; align-items: center; gap: 32px;
+  display: flex; align-items: center; gap: 40px;
   position: absolute; left: 0; top: 0; height: 100%;
   white-space: nowrap; will-change: transform;
   animation: tickerScroll var(--ticker-speed, 30s) linear infinite;
@@ -305,20 +315,25 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
 .ticker-content:hover { animation-play-state: paused; }
 @keyframes tickerScroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 .ticker-item {
-  font-size: 12px; font-family: var(--mono); color: var(--text2);
-  display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+  font-size: 13px; font-family: var(--mono); color: var(--text);
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+}
+.ticker-item .ticker-sep {
+  color: var(--text2); opacity: 0.3; font-size: 10px;
 }
 .ticker-item .ticker-type {
-  font-size: 9px; padding: 1px 5px; border-radius: 3px;
-  text-transform: uppercase; font-weight: 600;
+  font-size: 10px; padding: 2px 7px; border-radius: 3px;
+  text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px;
 }
 .ticker-type.signal { background: var(--blue); color: #fff; }
 .ticker-type.trade { background: var(--green); color: #fff; }
 .ticker-type.position { background: var(--yellow); color: #000; }
 .ticker-type.info { background: var(--accent); color: #fff; }
+.ticker-type.headline { background: #e11d48; color: #fff; }
+.ticker-type.status { background: var(--text2); color: var(--bg); }
 .ticker-dismiss {
   background: none; border: none; color: var(--text2); cursor: pointer;
-  font-size: 14px; padding: 0 8px; height: 100%; flex-shrink: 0;
+  font-size: 16px; padding: 0 10px; height: 100%; flex-shrink: 0;
 }
 .ticker-dismiss:hover { color: var(--text); }
 
@@ -1202,7 +1217,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     { name: "Toggle Theme", action: function() { document.getElementById("theme-toggle").click(); }, shortcut: "T" },
     { name: "Sync Projects", action: function() { switchTab("projects"); document.getElementById("btn-sync-projects").click(); } },
     { name: "Refresh All", action: function() { loadAll(); loadTicker(); toast("Refreshing all data", "info"); } },
-    { name: "Show Ticker", action: function() { document.getElementById("ticker-bar").classList.remove("hidden"); localStorage.removeItem("jclaw-ticker-hidden"); loadTicker(); } },
+    { name: "Show Ticker", action: function() { document.getElementById("ticker-bar").classList.remove("hidden"); localStorage.removeItem("jclaw-ticker-hidden"); renderTicker(defaultHeadlines, 45); loadTicker(); } },
     { name: "Go to Setup", action: function() { window.location.href = "/setup"; } },
     { name: "Go to Control UI", action: function() { window.location.href = "/openclaw"; } },
     { name: "Go to TUI", action: function() { window.location.href = "/tui"; } },
@@ -1301,66 +1316,79 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
   });
 
   // ── News Ticker ───────────────────────────────────────────────────────
-  var tickerHidden = localStorage.getItem("jclaw-ticker-hidden") === "true";
-  if (tickerHidden) document.getElementById("ticker-bar").classList.add("hidden");
+  // Default headlines always shown when no live market data is available
+  var defaultHeadlines = [
+    { type: "headline", text: "JClaw Command Center \u2014 AI-Powered DevOps & Market Intelligence" },
+    { type: "status", text: "System Online \u2014 All Services Operational" },
+    { type: "info", text: "Market Agents \u2014 Automated Trading & Signal Detection Active" },
+    { type: "info", text: "OpenClaw Gateway \u2014 Multi-Model AI Routing Enabled" },
+    { type: "status", text: "Railway Deployment \u2014 Auto-Deploy from Main Branch" },
+    { type: "headline", text: "Dashboard Tip: Press Ctrl+K for Command Palette" },
+  ];
 
   document.getElementById("ticker-dismiss").addEventListener("click", function() {
     document.getElementById("ticker-bar").classList.add("hidden");
     localStorage.setItem("jclaw-ticker-hidden", "true");
   });
 
+  function renderTicker(items, speed) {
+    var content = document.getElementById("ticker-content");
+    var dur = (speed || 30) + "s";
+    content.style.setProperty("--ticker-speed", dur);
+    content.style.animationDuration = dur;
+
+    function buildItems(list) {
+      var out = "";
+      for (var i = 0; i < list.length; i++) {
+        var item = list[i];
+        var typeClass = item.type || "info";
+        out += '<span class="ticker-item">';
+        if (i > 0) out += '<span class="ticker-sep">\u2022</span>';
+        out += '<span class="ticker-type ' + esc(typeClass) + '">' + esc(item.type || "info") + '</span> ' +
+          esc(item.text || "") + '</span>';
+      }
+      return out;
+    }
+    // Duplicate items for seamless infinite scroll loop
+    content.innerHTML = buildItems(items) + buildItems(items);
+  }
+
+  // Render default headlines immediately so the ticker is always visible
+  renderTicker(defaultHeadlines, 45);
+
   async function loadTicker() {
     var bar = document.getElementById("ticker-bar");
     if (bar.classList.contains("hidden")) return;
 
+    var config = { enabled: true, speed: 30 };
+    var liveItems = [];
+
     try {
-      var configP = api("GET", "/setup/api/ticker/config").catch(function() { return { config: { enabled: true } }; });
-      var dataP = api("GET", "/setup/api/market/ticker").catch(function() { return { items: [] }; });
-      var results = await Promise.all([configP, dataP]);
-      var config = results[0].config || {};
-      var items = results[1].items || [];
+      var configRes = await api("GET", "/setup/api/ticker/config").catch(function() { return {}; });
+      if (configRes && configRes.config) config = configRes.config;
+    } catch { /* use defaults */ }
 
-      if (!config.enabled) { bar.classList.add("hidden"); return; }
+    if (!config.enabled) { bar.classList.add("hidden"); return; }
 
-      // Add manual items
-      if (config.sources?.manual?.enabled && config.sources.manual.items?.length) {
-        config.sources.manual.items.forEach(function(text) {
-          items.push({ type: "info", text: text, ts: new Date().toISOString(), source: "manual" });
-        });
-      }
+    try {
+      var dataRes = await api("GET", "/setup/api/market/ticker").catch(function() { return {}; });
+      if (dataRes && dataRes.items) liveItems = dataRes.items;
+    } catch { /* use defaults */ }
 
-      if (items.length === 0) {
-        // Show a default message if no data
-        items.push({ type: "info", text: "No market data available. Connect market_agents or add manual ticker items in settings.", source: "default" });
-      }
-
-      // Set scroll speed from config
-      var speed = (config.speed || 30) + "s";
-      var content = document.getElementById("ticker-content");
-      content.style.setProperty("--ticker-speed", speed);
-      content.style.animationDuration = speed;
-
-      // Build ticker items (duplicate for seamless loop)
-      var html = "";
-      function buildItems(list) {
-        var out = "";
-        for (var i = 0; i < list.length; i++) {
-          var item = list[i];
-          var typeClass = item.type || "info";
-          out += '<span class="ticker-item">' +
-            '<span class="ticker-type ' + esc(typeClass) + '">' + esc(item.type || "info") + '</span> ' +
-            esc(item.text || "") +
-          '</span>';
-        }
-        return out;
-      }
-      html = buildItems(items) + buildItems(items); // duplicate for seamless loop
-      content.innerHTML = html;
-    } catch {
-      // Ticker data unavailable, hide gracefully
+    // Add manual items from config
+    if (config.sources?.manual?.enabled && config.sources.manual.items?.length) {
+      config.sources.manual.items.forEach(function(text) {
+        liveItems.push({ type: "info", text: text, source: "manual" });
+      });
     }
+
+    // Use live items if available, otherwise keep defaults
+    var items = liveItems.length > 0 ? liveItems : defaultHeadlines;
+    renderTicker(items, config.speed || 30);
   }
-  loadTicker();
+
+  // Load live data after a short delay (defaults already showing)
+  setTimeout(loadTicker, 1500);
   // Refresh ticker data every 2 minutes
   setInterval(loadTicker, 120000);
 
