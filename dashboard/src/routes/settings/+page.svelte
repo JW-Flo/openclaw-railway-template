@@ -33,11 +33,21 @@
     enabled: true,
     speed: 30,
     sources: {
+      polymarket: { enabled: true },
+      kalshi: { enabled: true },
       marketAgents: { enabled: true },
+      googleNews: { enabled: true, queries: ['AI technology', 'crypto markets', 'geopolitics'] },
+      fourChan: { enabled: true, boards: ['biz', 'pol', 'g'] },
+      reddit: { enabled: true, subreddits: ['wallstreetbets', 'technology', 'worldnews'] },
+      hackerNews: { enabled: true },
+      blogwatcher: { enabled: true },
       manual: { enabled: true, items: [] },
     },
   });
   let newTickerItem = $state('');
+  let newGoogleQuery = $state('');
+  let newChanBoard = $state('');
+  let newSubreddit = $state('');
 
   // Engine / Runner config
   let runnerLoading = $state(true);
@@ -1138,66 +1148,145 @@
           </div>
         </Card>
 
-        <Card title="Data Sources">
-          <div class="space-y-4">
-            <div class="flex items-center justify-between py-2 border-b border-border/50">
-              <div class="flex items-center gap-3">
-                <span class="w-8 h-8 rounded-lg bg-info/10 flex items-center justify-center">
-                  <svg class="w-4 h-4 text-info" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.28m5.94 2.28l-2.28 5.941" />
-                  </svg>
-                </span>
-                <div>
-                  <p class="text-sm text-text">Market Agents</p>
-                  <p class="text-[11px] text-text-3">Trades, signals, positions from market_agents</p>
-                </div>
+        {#snippet sourceToggle(key, label, desc, typeColor, iconPath)}
+          <div class="flex items-center justify-between py-2 border-b border-border/30 last:border-0">
+            <div class="flex items-center gap-3">
+              <span class="w-8 h-8 rounded-lg bg-{typeColor === 'signal' ? 'info' : typeColor === 'trade' ? 'success' : typeColor === 'headline' ? 'danger' : typeColor === 'status' ? 'text-2' : 'accent'}/10 flex items-center justify-center flex-shrink-0">
+                <svg class="w-4 h-4 text-{typeColor === 'signal' ? 'info' : typeColor === 'trade' ? 'success' : typeColor === 'headline' ? 'danger' : typeColor === 'status' ? 'text-2' : 'accent'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                  {@html iconPath}
+                </svg>
+              </span>
+              <div>
+                <p class="text-sm text-text">{label}</p>
+                <p class="text-[11px] text-text-3">{desc}</p>
               </div>
-              <button
-                class="relative w-11 h-6 rounded-full transition-colors duration-200 cursor-pointer
-                  {tickerConfig.sources?.marketAgents?.enabled ? 'bg-accent' : 'bg-surface-2 border border-border'}"
-                onclick={() => {
-                  if (!tickerConfig.sources.marketAgents) tickerConfig.sources.marketAgents = { enabled: false };
-                  tickerConfig.sources.marketAgents.enabled = !tickerConfig.sources.marketAgents.enabled;
-                }}
-              >
-                <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200
-                  {tickerConfig.sources?.marketAgents?.enabled ? 'translate-x-5' : ''}"></span>
-              </button>
             </div>
+            <button
+              class="relative w-11 h-6 rounded-full transition-colors duration-200 cursor-pointer flex-shrink-0
+                {tickerConfig.sources?.[key]?.enabled ? 'bg-accent' : 'bg-surface-2 border border-border'}"
+              onclick={() => {
+                if (!tickerConfig.sources[key]) tickerConfig.sources[key] = { enabled: false };
+                tickerConfig.sources[key].enabled = !tickerConfig.sources[key].enabled;
+              }}
+            >
+              <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200
+                {tickerConfig.sources?.[key]?.enabled ? 'translate-x-5' : ''}"></span>
+            </button>
+          </div>
+        {/snippet}
 
-            <div>
-              <div class="flex items-center justify-between mb-3">
-                <p class="text-sm text-text">Manual Headlines</p>
-                <button
-                  class="relative w-11 h-6 rounded-full transition-colors duration-200 cursor-pointer
-                    {tickerConfig.sources?.manual?.enabled ? 'bg-accent' : 'bg-surface-2 border border-border'}"
-                  onclick={() => {
-                    if (!tickerConfig.sources.manual) tickerConfig.sources.manual = { enabled: false, items: [] };
-                    tickerConfig.sources.manual.enabled = !tickerConfig.sources.manual.enabled;
-                  }}
-                >
-                  <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200
-                    {tickerConfig.sources?.manual?.enabled ? 'translate-x-5' : ''}"></span>
-                </button>
-              </div>
-              <div class="flex gap-2 mb-2">
-                <input bind:value={newTickerItem} placeholder="Add headline..." class="flex-1 bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text placeholder-text-3 focus:outline-none focus:border-accent/50"
-                  onkeydown={(e) => { if (e.key === 'Enter') addManualItem(); }} />
-                <Button variant="secondary" onclick={addManualItem}>Add</Button>
-              </div>
-              {#if tickerConfig.sources?.manual?.items?.length > 0}
-                <div class="space-y-1">
-                  {#each tickerConfig.sources.manual.items as item, i}
-                    <div class="flex items-center justify-between gap-2 px-3 py-2 bg-bg rounded-lg group">
-                      <span class="text-xs text-text-2 truncate">{item}</span>
-                      <button class="text-text-3 hover:text-danger transition-colors cursor-pointer opacity-0 group-hover:opacity-100 flex-shrink-0" onclick={() => removeManualItem(i)}>
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-                      </button>
-                    </div>
+        <Card title="Intelligence Sources">
+          <p class="text-xs text-text-3 mb-4">Toggle data feeds that populate the ticker. Changes take effect after save.</p>
+          <div class="space-y-3">
+
+            <!-- Polymarket -->
+            {@render sourceToggle('polymarket', 'Polymarket', 'Prediction market odds & volume (top 8 markets)', 'signal',
+              `<path stroke-linecap="round" stroke-linejoin="round" d="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.28m5.94 2.28l-2.28 5.941" />`)}
+
+            <!-- Kalshi -->
+            {@render sourceToggle('kalshi', 'Kalshi', 'Event contract markets & YES/NO pricing', 'trade',
+              `<path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />`)}
+
+            <!-- Market Agents DB -->
+            {@render sourceToggle('marketAgents', 'Market Agents DB', 'Local trading signals & opportunities', 'signal',
+              `<path stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375" />`)}
+
+            <!-- Google News -->
+            {@render sourceToggle('googleNews', 'Google News', 'RSS headlines from Google News search queries', 'headline',
+              `<path stroke-linecap="round" stroke-linejoin="round" d="M12 7.5h1.5m-1.5 3h1.5m-7.5 3h7.5m-7.5 3h7.5m3-9h3.375c.621 0 1.125.504 1.125 1.125V18a2.25 2.25 0 01-2.25 2.25M16.5 7.5V18a2.25 2.25 0 002.25 2.25M16.5 7.5V4.875c0-.621-.504-1.125-1.125-1.125H4.125C3.504 3.75 3 4.254 3 4.875V18a2.25 2.25 0 002.25 2.25h13.5" />`)}
+            {#if tickerConfig.sources?.googleNews?.enabled}
+              <div class="ml-11 space-y-2">
+                <div class="flex gap-2">
+                  <input bind:value={newGoogleQuery} placeholder="Add search query..." class="flex-1 bg-bg border border-border rounded-lg px-3 py-1.5 text-xs text-text placeholder-text-3 focus:outline-none focus:border-accent/50"
+                    onkeydown={(e) => { if (e.key === 'Enter' && newGoogleQuery.trim()) { tickerConfig.sources.googleNews.queries = [...(tickerConfig.sources.googleNews.queries || []), newGoogleQuery.trim()]; newGoogleQuery = ''; }}} />
+                  <button class="text-xs text-accent hover:text-accent-2 cursor-pointer" onclick={() => { if (newGoogleQuery.trim()) { tickerConfig.sources.googleNews.queries = [...(tickerConfig.sources.googleNews.queries || []), newGoogleQuery.trim()]; newGoogleQuery = ''; }}}>Add</button>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                  {#each (tickerConfig.sources?.googleNews?.queries || []) as q, i}
+                    <span class="inline-flex items-center gap-1 bg-bg border border-border rounded-md px-2 py-0.5 text-[11px] text-text-2">
+                      {q}
+                      <button class="text-text-3 hover:text-danger cursor-pointer" onclick={() => { tickerConfig.sources.googleNews.queries = tickerConfig.sources.googleNews.queries.filter((_, j) => j !== i); }}>&times;</button>
+                    </span>
                   {/each}
                 </div>
-              {/if}
-            </div>
+              </div>
+            {/if}
+
+            <!-- 4chan -->
+            {@render sourceToggle('fourChan', '4chan', 'Thread subjects from boards (/biz/, /pol/, /g/)', 'info',
+              `<path stroke-linecap="round" stroke-linejoin="round" d="M20.893 13.393l-1.135-1.135a2.252 2.252 0 01-.421-.585l-1.08-2.16a.414.414 0 00-.663-.107l-.61.61a2.25 2.25 0 01-3.182 0l-3.976-3.976a.75.75 0 00-1.06 0L4.5 10.306V18a2.25 2.25 0 002.25 2.25h10.5A2.25 2.25 0 0019.5 18v-2.99a2.25 2.25 0 01.659-1.591l.724-.724.01-.01z" />`)}
+            {#if tickerConfig.sources?.fourChan?.enabled}
+              <div class="ml-11 space-y-2">
+                <div class="flex gap-2">
+                  <input bind:value={newChanBoard} placeholder="Board name (e.g. biz)" class="flex-1 bg-bg border border-border rounded-lg px-3 py-1.5 text-xs text-text placeholder-text-3 focus:outline-none focus:border-accent/50"
+                    onkeydown={(e) => { if (e.key === 'Enter' && /^[a-z0-9]+$/.test(newChanBoard.trim())) { tickerConfig.sources.fourChan.boards = [...(tickerConfig.sources.fourChan.boards || []), newChanBoard.trim()]; newChanBoard = ''; }}} />
+                  <button class="text-xs text-accent hover:text-accent-2 cursor-pointer" onclick={() => { if (/^[a-z0-9]+$/.test(newChanBoard.trim())) { tickerConfig.sources.fourChan.boards = [...(tickerConfig.sources.fourChan.boards || []), newChanBoard.trim()]; newChanBoard = ''; }}}>Add</button>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                  {#each (tickerConfig.sources?.fourChan?.boards || []) as b, i}
+                    <span class="inline-flex items-center gap-1 bg-bg border border-border rounded-md px-2 py-0.5 text-[11px] text-text-2">
+                      /{b}/
+                      <button class="text-text-3 hover:text-danger cursor-pointer" onclick={() => { tickerConfig.sources.fourChan.boards = tickerConfig.sources.fourChan.boards.filter((_, j) => j !== i); }}>&times;</button>
+                    </span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <!-- Reddit -->
+            {@render sourceToggle('reddit', 'Reddit', 'Hot posts from specified subreddits', 'info',
+              `<path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197" />`)}
+            {#if tickerConfig.sources?.reddit?.enabled}
+              <div class="ml-11 space-y-2">
+                <div class="flex gap-2">
+                  <input bind:value={newSubreddit} placeholder="Subreddit name (e.g. technology)" class="flex-1 bg-bg border border-border rounded-lg px-3 py-1.5 text-xs text-text placeholder-text-3 focus:outline-none focus:border-accent/50"
+                    onkeydown={(e) => { if (e.key === 'Enter' && /^[a-zA-Z0-9_]+$/.test(newSubreddit.trim())) { tickerConfig.sources.reddit.subreddits = [...(tickerConfig.sources.reddit.subreddits || []), newSubreddit.trim()]; newSubreddit = ''; }}} />
+                  <button class="text-xs text-accent hover:text-accent-2 cursor-pointer" onclick={() => { if (/^[a-zA-Z0-9_]+$/.test(newSubreddit.trim())) { tickerConfig.sources.reddit.subreddits = [...(tickerConfig.sources.reddit.subreddits || []), newSubreddit.trim()]; newSubreddit = ''; }}}>Add</button>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                  {#each (tickerConfig.sources?.reddit?.subreddits || []) as sub, i}
+                    <span class="inline-flex items-center gap-1 bg-bg border border-border rounded-md px-2 py-0.5 text-[11px] text-text-2">
+                      r/{sub}
+                      <button class="text-text-3 hover:text-danger cursor-pointer" onclick={() => { tickerConfig.sources.reddit.subreddits = tickerConfig.sources.reddit.subreddits.filter((_, j) => j !== i); }}>&times;</button>
+                    </span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <!-- Hacker News -->
+            {@render sourceToggle('hackerNews', 'Hacker News', 'Top stories from HN front page', 'headline',
+              `<path stroke-linecap="round" stroke-linejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />`)}
+
+            <!-- Blogwatcher -->
+            {@render sourceToggle('blogwatcher', 'Blogwatcher', 'Unread articles from monitored RSS/Atom feeds', 'headline',
+              `<path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />`)}
+
+            <!-- Manual Headlines -->
+            {@render sourceToggle('manual', 'Manual Headlines', 'Custom items you add manually', 'status',
+              `<path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />`)}
+            {#if tickerConfig.sources?.manual?.enabled}
+              <div class="ml-11 space-y-2">
+                <div class="flex gap-2">
+                  <input bind:value={newTickerItem} placeholder="Add headline..." class="flex-1 bg-bg border border-border rounded-lg px-3 py-1.5 text-xs text-text placeholder-text-3 focus:outline-none focus:border-accent/50"
+                    onkeydown={(e) => { if (e.key === 'Enter') addManualItem(); }} />
+                  <button class="text-xs text-accent hover:text-accent-2 cursor-pointer" onclick={addManualItem}>Add</button>
+                </div>
+                {#if tickerConfig.sources?.manual?.items?.length > 0}
+                  <div class="space-y-1">
+                    {#each tickerConfig.sources.manual.items as item, i}
+                      <div class="flex items-center justify-between gap-2 px-3 py-1.5 bg-bg rounded-lg group">
+                        <span class="text-[11px] text-text-2 truncate">{item}</span>
+                        <button class="text-text-3 hover:text-danger transition-colors cursor-pointer opacity-0 group-hover:opacity-100 flex-shrink-0" onclick={() => removeManualItem(i)}>
+                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                        </button>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+
           </div>
         </Card>
 

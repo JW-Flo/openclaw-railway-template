@@ -4769,18 +4769,34 @@ app.post("/setup/api/sessions/resume", requireSetupAuth, (req, res) => {
 
 const TICKER_CONFIG_PATH = path.join(STATE_DIR, "ticker-config.json");
 
+const DEFAULT_TICKER_CONFIG = {
+  enabled: true,
+  speed: 30,
+  sources: {
+    polymarket: { enabled: true },
+    kalshi: { enabled: true },
+    marketAgents: { enabled: true },
+    googleNews: { enabled: true, queries: ["AI technology", "crypto markets", "geopolitics"] },
+    fourChan: { enabled: true, boards: ["biz", "pol", "g"] },
+    reddit: { enabled: true, subreddits: ["wallstreetbets", "technology", "worldnews"] },
+    hackerNews: { enabled: true },
+    blogwatcher: { enabled: true },
+    manual: { enabled: true, items: [] },
+  },
+};
+
 function readTickerConfig() {
   try {
-    return JSON.parse(fs.readFileSync(TICKER_CONFIG_PATH, "utf8"));
+    const saved = JSON.parse(fs.readFileSync(TICKER_CONFIG_PATH, "utf8"));
+    // Merge with defaults so new sources get added on upgrade
+    const merged = { ...DEFAULT_TICKER_CONFIG, ...saved };
+    merged.sources = { ...DEFAULT_TICKER_CONFIG.sources };
+    for (const [key, val] of Object.entries(saved.sources || {})) {
+      merged.sources[key] = { ...(DEFAULT_TICKER_CONFIG.sources[key] || {}), ...val };
+    }
+    return merged;
   } catch {
-    return {
-      enabled: true,
-      speed: 30,
-      sources: {
-        marketAgents: { enabled: true, label: "Market Data" },
-        manual: { enabled: true, items: [] },
-      },
-    };
+    return { ...DEFAULT_TICKER_CONFIG, sources: { ...DEFAULT_TICKER_CONFIG.sources } };
   }
 }
 
@@ -4798,17 +4814,17 @@ app.post("/setup/api/ticker/config", requireSetupAuth, (req, res) => {
   if (typeof enabled === "boolean") config.enabled = enabled;
   if (typeof speed === "number" && speed >= 5 && speed <= 120) config.speed = speed;
   if (sources && typeof sources === "object") {
-    if (sources.marketAgents && typeof sources.marketAgents === "object") {
-      config.sources.marketAgents = { ...config.sources.marketAgents, ...sources.marketAgents };
-    }
-    if (sources.manual && typeof sources.manual === "object") {
-      if (Array.isArray(sources.manual.items)) {
-        config.sources.manual.items = sources.manual.items
-          .filter(i => typeof i === "string")
-          .slice(0, 50)
-          .map(i => i.slice(0, 500));
+    for (const [key, val] of Object.entries(sources)) {
+      if (!val || typeof val !== "object") continue;
+      if (!config.sources[key]) config.sources[key] = {};
+      // Merge source-level settings
+      if (typeof val.enabled === "boolean") config.sources[key].enabled = val.enabled;
+      if (Array.isArray(val.queries)) config.sources[key].queries = val.queries.filter(q => typeof q === "string").slice(0, 10).map(q => q.slice(0, 100));
+      if (Array.isArray(val.boards)) config.sources[key].boards = val.boards.filter(b => typeof b === "string" && /^[a-z0-9]+$/.test(b)).slice(0, 5);
+      if (Array.isArray(val.subreddits)) config.sources[key].subreddits = val.subreddits.filter(s => typeof s === "string" && /^[a-zA-Z0-9_]+$/.test(s)).slice(0, 10);
+      if (Array.isArray(val.items)) {
+        config.sources[key].items = val.items.filter(i => typeof i === "string").slice(0, 50).map(i => i.slice(0, 500));
       }
-      if (typeof sources.manual.enabled === "boolean") config.sources.manual.enabled = sources.manual.enabled;
     }
   }
   writeTickerConfig(config);
@@ -4817,92 +4833,268 @@ app.post("/setup/api/ticker/config", requireSetupAuth, (req, res) => {
 
 // ── Market Data Ticker ──────────────────────────────────────────────────
 
-// In-memory cache for market ticker data (avoid hammering external APIs)
-let _tickerCache = { items: [], ts: 0 };
-const TICKER_CACHE_TTL = 90_000; // 90 seconds
+// Per-source caches (each source has its own TTL to avoid stale data)
+const _sourceCache = {};
+const SOURCE_CACHE_TTL = 90_000; // 90 seconds
 
-async function fetchMarketTickerItems() {
-  const now = Date.now();
-  if (_tickerCache.items.length > 0 && now - _tickerCache.ts < TICKER_CACHE_TTL) {
-    return _tickerCache.items;
-  }
+function getCached(source) {
+  const c = _sourceCache[source];
+  if (c && c.items.length > 0 && Date.now() - c.ts < SOURCE_CACHE_TTL) return c.items;
+  return null;
+}
+function setCache(source, items) {
+  _sourceCache[source] = { items, ts: Date.now() };
+}
 
+// ── Individual Source Fetchers ───────────────────────────────────────────
+
+async function fetchPolymarket(signal) {
+  const cached = getCached("polymarket");
+  if (cached) return cached;
   const items = [];
+  const res = await fetch(
+    "https://gamma-api.polymarket.com/markets?closed=false&order=volume24hr&ascending=false&limit=8",
+    { signal, headers: { Accept: "application/json" } },
+  ).then((r) => (r.ok ? r.json() : [])).catch(() => []);
+  for (const m of Array.isArray(res) ? res.slice(0, 8) : []) {
+    const q = (m.question || m.title || "").slice(0, 120);
+    const price = m.outcomePrices ? JSON.parse(m.outcomePrices)[0] : m.bestAsk;
+    const vol = m.volume24hr || m.volume;
+    if (!q) continue;
+    const pricePct = price != null ? `${(Number(price) * 100).toFixed(0)}%` : "";
+    const volStr = vol != null ? `Vol: $${Number(vol).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "";
+    items.push({
+      type: "signal", source: "polymarket",
+      text: `${q}${pricePct ? ` — YES ${pricePct}` : ""}${volStr ? ` | ${volStr}` : ""}`,
+      ts: m.updatedAt || m.startDate || new Date().toISOString(),
+    });
+  }
+  setCache("polymarket", items);
+  return items;
+}
+
+async function fetchKalshi(signal) {
+  const cached = getCached("kalshi");
+  if (cached) return cached;
+  const items = [];
+  const res = await fetch(
+    "https://api.elections.kalshi.com/trade-api/v2/events?status=open&limit=6&with_nested_markets=true",
+    { signal, headers: { Accept: "application/json" } },
+  ).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+  for (const ev of (res.events || []).slice(0, 6)) {
+    const title = (ev.title || "").slice(0, 120);
+    if (!title) continue;
+    const mkt = (ev.markets || [])[0];
+    const yes = mkt ? mkt.yes_ask || mkt.last_price : null;
+    const pricePct = yes != null ? `${Number(yes)}%` : "";
+    items.push({
+      type: "trade", source: "kalshi",
+      text: `${title}${pricePct ? ` — YES ${pricePct}` : ""}`,
+      ts: ev.updated_at || new Date().toISOString(),
+    });
+  }
+  setCache("kalshi", items);
+  return items;
+}
+
+async function fetchMarketAgentsDB() {
+  const cached = getCached("market_agents");
+  if (cached) return cached;
+  const items = [];
+  const dbPath = path.join(WORKSPACE_DIR, "market_agents", "data", "market_agents.db");
+  const opp = await runCmd("sh", ["-c",
+    `sqlite3 -json "${dbPath}" "SELECT question, signal_type, yes_price, no_price, spread, detected_at FROM opportunities ORDER BY rowid DESC LIMIT 5" 2>/dev/null || echo "[]"`
+  ]);
+  const parsed = JSON.parse(opp.output || "[]");
+  for (const o of parsed.slice(0, 5)) {
+    items.push({
+      type: "signal", source: "market_agents",
+      text: `${o.question || "Opportunity"}: ${o.signal_type || ""} spread ${o.spread || "?"}`,
+      ts: o.detected_at || new Date().toISOString(),
+    });
+  }
+  setCache("market_agents", items);
+  return items;
+}
+
+async function fetchGoogleNews(signal, queries) {
+  const cached = getCached("googleNews");
+  if (cached) return cached;
+  const items = [];
+  const searchTerms = Array.isArray(queries) && queries.length > 0
+    ? queries : ["technology", "markets"];
+  // Fetch Google News RSS for each query (limit total)
+  for (const q of searchTerms.slice(0, 3)) {
+    try {
+      const url = `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`;
+      const text = await fetch(url, { signal, headers: { "User-Agent": "Mozilla/5.0" } })
+        .then(r => r.ok ? r.text() : "").catch(() => "");
+      // Parse RSS XML — extract <item><title> tags
+      const titleRe = /<item>[\s\S]*?<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<item>[\s\S]*?<title>([\s\S]*?)<\/title>/g;
+      let match;
+      let count = 0;
+      while ((match = titleRe.exec(text)) !== null && count < 4) {
+        const headline = (match[1] || match[2] || "").replace(/<[^>]*>/g, "").trim().slice(0, 140);
+        if (!headline) continue;
+        items.push({ type: "headline", source: "googleNews", text: headline, ts: new Date().toISOString() });
+        count++;
+      }
+    } catch { /* query failed */ }
+  }
+  setCache("googleNews", items);
+  return items;
+}
+
+async function fetchFourChan(signal, boards) {
+  const cached = getCached("fourChan");
+  if (cached) return cached;
+  const items = [];
+  const boardList = Array.isArray(boards) && boards.length > 0
+    ? boards.filter(b => /^[a-z0-9]+$/.test(b)) : ["biz"];
+  for (const board of boardList.slice(0, 3)) {
+    try {
+      const catalog = await fetch(`https://a.4cdn.org/${board}/catalog.json`, { signal })
+        .then(r => r.ok ? r.json() : []).catch(() => []);
+      // catalog is array of pages, each with threads
+      let count = 0;
+      for (const page of catalog.slice(0, 2)) {
+        for (const thread of (page.threads || []).slice(0, 8)) {
+          if (count >= 5) break;
+          const sub = (thread.sub || "").replace(/<[^>]*>/g, "").trim();
+          const com = (thread.com || "").replace(/<[^>]*>/g, "").replace(/&#039;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&gt;/g, ">").replace(/&lt;/g, "<").trim();
+          const text = (sub || com.slice(0, 120) || "").slice(0, 120);
+          if (!text || text.length < 10) continue;
+          const replies = thread.replies || 0;
+          const images = thread.images || 0;
+          items.push({
+            type: "info", source: "fourChan",
+            text: `/${board}/ ${text}${replies > 5 ? ` [${replies}R/${images}I]` : ""}`,
+            ts: thread.time ? new Date(thread.time * 1000).toISOString() : new Date().toISOString(),
+          });
+          count++;
+        }
+        if (count >= 5) break;
+      }
+    } catch { /* board fetch failed */ }
+  }
+  setCache("fourChan", items);
+  return items;
+}
+
+async function fetchReddit(signal, subreddits) {
+  const cached = getCached("reddit");
+  if (cached) return cached;
+  const items = [];
+  const subs = Array.isArray(subreddits) && subreddits.length > 0
+    ? subreddits.filter(s => /^[a-zA-Z0-9_]+$/.test(s)) : ["wallstreetbets"];
+  for (const sub of subs.slice(0, 3)) {
+    try {
+      const data = await fetch(`https://www.reddit.com/r/${sub}/hot.json?limit=5`, {
+        signal, headers: { "User-Agent": "JClaw-Ticker/1.0" },
+      }).then(r => r.ok ? r.json() : {}).catch(() => ({}));
+      const posts = data?.data?.children || [];
+      for (const post of posts.slice(0, 5)) {
+        const d = post.data;
+        if (!d || d.stickied) continue;
+        const title = (d.title || "").slice(0, 120);
+        if (!title) continue;
+        const score = d.score || 0;
+        const comments = d.num_comments || 0;
+        items.push({
+          type: "info", source: "reddit",
+          text: `r/${sub}: ${title}${score > 100 ? ` [↑${score > 1000 ? (score / 1000).toFixed(1) + "k" : score}]` : ""}`,
+          ts: d.created_utc ? new Date(d.created_utc * 1000).toISOString() : new Date().toISOString(),
+        });
+      }
+    } catch { /* subreddit fetch failed */ }
+  }
+  setCache("reddit", items);
+  return items;
+}
+
+async function fetchHackerNews(signal) {
+  const cached = getCached("hackerNews");
+  if (cached) return cached;
+  const items = [];
+  // Use Algolia HN API for top stories
+  const data = await fetch(
+    "https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=8",
+    { signal, headers: { Accept: "application/json" } },
+  ).then(r => r.ok ? r.json() : {}).catch(() => ({}));
+  for (const hit of (data.hits || []).slice(0, 8)) {
+    const title = (hit.title || "").slice(0, 120);
+    if (!title) continue;
+    const points = hit.points || 0;
+    items.push({
+      type: "headline", source: "hackerNews",
+      text: `HN: ${title}${points > 50 ? ` [${points}pts]` : ""}`,
+      ts: hit.created_at || new Date().toISOString(),
+    });
+  }
+  setCache("hackerNews", items);
+  return items;
+}
+
+async function fetchBlogwatcher() {
+  const cached = getCached("blogwatcher");
+  if (cached) return cached;
+  const items = [];
+  // blogwatcher CLI stores articles in its local DB — scan then list recent
+  try {
+    await runCmd("blogwatcher", ["scan"]);
+  } catch { /* scan may fail if no blogs configured */ }
+  const result = await runCmd("blogwatcher", ["articles", "--unread"]);
+  const lines = (result.output || "").split("\n").filter(l => l.trim());
+  // Parse tabular output: ID | Source | Title | Published
+  for (const line of lines.slice(0, 10)) {
+    // Skip header lines
+    if (line.includes("---") || line.toLowerCase().startsWith("id")) continue;
+    const parts = line.split("|").map(p => p.trim());
+    if (parts.length < 3) continue;
+    const source = parts[1] || "blog";
+    const title = (parts[2] || "").slice(0, 120);
+    if (!title) continue;
+    items.push({
+      type: "headline", source: "blogwatcher",
+      text: `[${source}] ${title}`,
+      ts: parts[3] || new Date().toISOString(),
+    });
+  }
+  setCache("blogwatcher", items);
+  return items;
+}
+
+// ── Aggregator ──────────────────────────────────────────────────────────
+
+async function fetchMarketTickerItems(config) {
+  const src = config?.sources || {};
   const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 8000);
+  const timeout = setTimeout(() => ctrl.abort(), 10000);
 
-  try {
-    // Polymarket: trending / high-volume markets
-    const polyRes = await fetch(
-      "https://gamma-api.polymarket.com/markets?closed=false&order=volume24hr&ascending=false&limit=8",
-      { signal: ctrl.signal, headers: { Accept: "application/json" } },
-    ).then((r) => (r.ok ? r.json() : [])).catch(() => []);
+  // Build list of enabled fetchers
+  const fetchers = [];
+  if (src.polymarket?.enabled !== false) fetchers.push(fetchPolymarket(ctrl.signal));
+  if (src.kalshi?.enabled !== false) fetchers.push(fetchKalshi(ctrl.signal));
+  if (src.marketAgents?.enabled !== false) fetchers.push(fetchMarketAgentsDB());
+  if (src.googleNews?.enabled !== false) fetchers.push(fetchGoogleNews(ctrl.signal, src.googleNews?.queries));
+  if (src.fourChan?.enabled !== false) fetchers.push(fetchFourChan(ctrl.signal, src.fourChan?.boards));
+  if (src.reddit?.enabled !== false) fetchers.push(fetchReddit(ctrl.signal, src.reddit?.subreddits));
+  if (src.hackerNews?.enabled !== false) fetchers.push(fetchHackerNews(ctrl.signal));
+  if (src.blogwatcher?.enabled !== false) fetchers.push(fetchBlogwatcher());
 
-    for (const m of Array.isArray(polyRes) ? polyRes.slice(0, 8) : []) {
-      const q = (m.question || m.title || "").slice(0, 120);
-      const price = m.outcomePrices ? JSON.parse(m.outcomePrices)[0] : m.bestAsk;
-      const vol = m.volume24hr || m.volume;
-      if (!q) continue;
-      const pricePct = price != null ? `${(Number(price) * 100).toFixed(0)}%` : "";
-      const volStr = vol != null ? `Vol: $${Number(vol).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "";
-      items.push({
-        type: "signal",
-        text: `${q}${pricePct ? ` — YES ${pricePct}` : ""}${volStr ? ` | ${volStr}` : ""}`,
-        ts: m.updatedAt || m.startDate || new Date().toISOString(),
-        source: "polymarket",
-      });
-    }
-  } catch { /* Polymarket unavailable */ }
-
-  try {
-    // Kalshi: active high-volume event markets
-    const kalshiRes = await fetch(
-      "https://api.elections.kalshi.com/trade-api/v2/events?status=open&limit=6&with_nested_markets=true",
-      { signal: ctrl.signal, headers: { Accept: "application/json" } },
-    ).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
-
-    const events = kalshiRes.events || [];
-    for (const ev of events.slice(0, 6)) {
-      const title = (ev.title || "").slice(0, 120);
-      if (!title) continue;
-      // Pick the first nested market for price info (Kalshi prices are in cents)
-      const mkt = (ev.markets || [])[0];
-      const yes = mkt ? mkt.yes_ask || mkt.last_price : null;
-      const pricePct = yes != null ? `${Number(yes)}%` : "";
-      items.push({
-        type: "trade",
-        text: `${title}${pricePct ? ` — YES ${pricePct}` : ""}`,
-        ts: ev.updated_at || new Date().toISOString(),
-        source: "kalshi",
-      });
-    }
-  } catch { /* Kalshi unavailable */ }
-
+  const results = await Promise.allSettled(fetchers);
   clearTimeout(timeout);
 
-  // Also try local market_agents DB if it exists
-  try {
-    const dbPath = path.join(WORKSPACE_DIR, "market_agents", "data", "market_agents.db");
-    const opp = await runCmd("sh", ["-c",
-      `sqlite3 -json "${dbPath}" "SELECT question, signal_type, yes_price, no_price, spread, detected_at FROM opportunities ORDER BY rowid DESC LIMIT 5" 2>/dev/null || echo "[]"`
-    ]);
-    const parsed = JSON.parse(opp.output || "[]");
-    for (const o of parsed.slice(0, 5)) {
-      items.push({
-        type: "signal",
-        text: `${o.question || "Opportunity"}: ${o.signal_type || ""} spread ${o.spread || "?"}`,
-        ts: o.detected_at || new Date().toISOString(),
-        source: "market_agents",
-      });
-    }
-  } catch { /* DB not available */ }
-
-  _tickerCache = { items, ts: now };
+  const items = [];
+  for (const r of results) {
+    if (r.status === "fulfilled" && Array.isArray(r.value)) items.push(...r.value);
+  }
   return items;
 }
 
 app.get("/setup/api/market/ticker", requireSetupAuth, async (_req, res) => {
-  const items = await fetchMarketTickerItems();
+  const config = readTickerConfig();
+  const items = await fetchMarketTickerItems(config);
   return res.json({ ok: true, items });
 });
 

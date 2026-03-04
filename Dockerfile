@@ -55,8 +55,11 @@ ENV HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
 ENV HOMEBREW_CELLAR="/home/linuxbrew/.linuxbrew/Cellar"
 ENV HOMEBREW_REPOSITORY="/home/linuxbrew/.linuxbrew/Homebrew"
 
-# Install skill dependencies via brew (uv for nano-banana-pro, himalaya for email)
-RUN brew install uv himalaya
+# Install skill dependencies via brew (uv for nano-banana-pro, himalaya for email, go for blogwatcher)
+RUN brew install uv himalaya go \
+  && go install github.com/Hyaxia/blogwatcher/cmd/blogwatcher@latest \
+  && mv ~/go/bin/blogwatcher /home/openclaw/.local/bin/ \
+  && rm -rf ~/go
 
 # Create npx wrapper scripts for skill CLIs not available via brew/apt
 RUN mkdir -p /home/openclaw/.local/bin \
