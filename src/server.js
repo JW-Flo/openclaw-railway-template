@@ -4817,66 +4817,92 @@ app.post("/setup/api/ticker/config", requireSetupAuth, (req, res) => {
 
 // ── Market Data Ticker ──────────────────────────────────────────────────
 
-app.get("/setup/api/market/ticker", requireSetupAuth, async (_req, res) => {
-  // Query market_agents SQLite database for recent data
-  const dbPath = path.join(WORKSPACE_DIR, "market_agents", "data", "market_agents.db");
-  const items = [];
+// In-memory cache for market ticker data (avoid hammering external APIs)
+let _tickerCache = { items: [], ts: 0 };
+const TICKER_CACHE_TTL = 90_000; // 90 seconds
 
-  try {
-    // Recent arb signals
-    const signals = await runCmd("sh", ["-c",
-      `sqlite3 -json "${dbPath}" "SELECT * FROM arb_signals ORDER BY rowid DESC LIMIT 10" 2>/dev/null || echo "[]"`
-    ]);
-    try {
-      const parsed = JSON.parse(signals.output || "[]");
-      for (const s of parsed.slice(0, 5)) {
-        items.push({
-          type: "signal",
-          text: `${s.event || s.market || "Signal"}: ${s.signal_type || s.direction || ""} ${s.edge ? `(edge: ${s.edge})` : ""}`.trim(),
-          ts: s.timestamp || s.created_at || new Date().toISOString(),
-          source: "market_agents",
-        });
-      }
-    } catch { /* skip */ }
-
-    // Recent fills/trades
-    const fills = await runCmd("sh", ["-c",
-      `sqlite3 -json "${dbPath}" "SELECT * FROM kalshi_fills ORDER BY rowid DESC LIMIT 10" 2>/dev/null || echo "[]"`
-    ]);
-    try {
-      const parsed = JSON.parse(fills.output || "[]");
-      for (const f of parsed.slice(0, 5)) {
-        const side = f.side || f.action || "";
-        const price = f.price || f.fill_price || "";
-        items.push({
-          type: "trade",
-          text: `${f.ticker || f.market || "Trade"}: ${side} @ ${price}`.trim(),
-          ts: f.created_time || f.timestamp || new Date().toISOString(),
-          source: "market_agents",
-        });
-      }
-    } catch { /* skip */ }
-
-    // Recent positions
-    const positions = await runCmd("sh", ["-c",
-      `sqlite3 -json "${dbPath}" "SELECT * FROM positions ORDER BY rowid DESC LIMIT 5" 2>/dev/null || echo "[]"`
-    ]);
-    try {
-      const parsed = JSON.parse(positions.output || "[]");
-      for (const p of parsed.slice(0, 3)) {
-        items.push({
-          type: "position",
-          text: `Position: ${p.ticker || p.market || "?"} ${p.side || ""} qty:${p.quantity || p.count || "?"}`.trim(),
-          ts: p.updated_at || p.created_at || new Date().toISOString(),
-          source: "market_agents",
-        });
-      }
-    } catch { /* skip */ }
-  } catch (err) {
-    // DB not found or sqlite3 not available — that's fine
-    console.warn("[market-ticker] query error:", err.message);
+async function fetchMarketTickerItems() {
+  const now = Date.now();
+  if (_tickerCache.items.length > 0 && now - _tickerCache.ts < TICKER_CACHE_TTL) {
+    return _tickerCache.items;
   }
 
+  const items = [];
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 8000);
+
+  try {
+    // Polymarket: trending / high-volume markets
+    const polyRes = await fetch(
+      "https://gamma-api.polymarket.com/markets?closed=false&order=volume24hr&ascending=false&limit=8",
+      { signal: ctrl.signal, headers: { Accept: "application/json" } },
+    ).then((r) => (r.ok ? r.json() : [])).catch(() => []);
+
+    for (const m of Array.isArray(polyRes) ? polyRes.slice(0, 8) : []) {
+      const q = (m.question || m.title || "").slice(0, 120);
+      const price = m.outcomePrices ? JSON.parse(m.outcomePrices)[0] : m.bestAsk;
+      const vol = m.volume24hr || m.volume;
+      if (!q) continue;
+      const pricePct = price != null ? `${(Number(price) * 100).toFixed(0)}%` : "";
+      const volStr = vol != null ? `Vol: $${Number(vol).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "";
+      items.push({
+        type: "signal",
+        text: `${q}${pricePct ? ` — YES ${pricePct}` : ""}${volStr ? ` | ${volStr}` : ""}`,
+        ts: m.updatedAt || m.startDate || new Date().toISOString(),
+        source: "polymarket",
+      });
+    }
+  } catch { /* Polymarket unavailable */ }
+
+  try {
+    // Kalshi: active high-volume event markets
+    const kalshiRes = await fetch(
+      "https://api.elections.kalshi.com/trade-api/v2/events?status=open&limit=6&with_nested_markets=true",
+      { signal: ctrl.signal, headers: { Accept: "application/json" } },
+    ).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+
+    const events = kalshiRes.events || [];
+    for (const ev of events.slice(0, 6)) {
+      const title = (ev.title || "").slice(0, 120);
+      if (!title) continue;
+      // Pick the first nested market for price info
+      const mkt = (ev.markets || [])[0];
+      const yes = mkt ? mkt.yes_ask || mkt.last_price : null;
+      const pricePct = yes != null ? `${(Number(yes) * 100).toFixed(0)}%` : "";
+      items.push({
+        type: "trade",
+        text: `${title}${pricePct ? ` — YES ${pricePct}` : ""}`,
+        ts: ev.updated_at || new Date().toISOString(),
+        source: "kalshi",
+      });
+    }
+  } catch { /* Kalshi unavailable */ }
+
+  clearTimeout(timeout);
+
+  // Also try local market_agents DB if it exists
+  try {
+    const dbPath = path.join(WORKSPACE_DIR, "market_agents", "data", "market_agents.db");
+    const opp = await runCmd("sh", ["-c",
+      `sqlite3 -json "${dbPath}" "SELECT question, signal_type, yes_price, no_price, spread, detected_at FROM opportunities ORDER BY rowid DESC LIMIT 5" 2>/dev/null || echo "[]"`
+    ]);
+    const parsed = JSON.parse(opp.output || "[]");
+    for (const o of parsed.slice(0, 5)) {
+      items.push({
+        type: "signal",
+        text: `${o.question || "Opportunity"}: ${o.signal_type || ""} spread ${o.spread || "?"}`,
+        ts: o.detected_at || new Date().toISOString(),
+        source: "market_agents",
+      });
+    }
+  } catch { /* DB not available */ }
+
+  _tickerCache = { items, ts: now };
+  return items;
+}
+
+app.get("/setup/api/market/ticker", requireSetupAuth, async (_req, res) => {
+  const items = await fetchMarketTickerItems();
   return res.json({ ok: true, items });
 });
 
