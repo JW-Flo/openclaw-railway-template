@@ -72,10 +72,9 @@ open http://localhost:8080/setup  # password: test
 - **src/server.js** (main entry): Express wrapper, proxy setup, gateway lifecycle management, configuration persistence, DevOps APIs (server logic only - no inline HTML/CSS)
 - **src/public/** (static assets):
   - **setup.html**: Setup wizard HTML structure
-  - **dashboard.html**: DevOps dashboard with overview, projects, models, and tools tabs
   - **loading.html**: Loading/splash page
   - **tui.html**: Terminal UI page
-- **workspace-templates/**: Agent personality templates (IDENTITY, USER, MEMORY, TOOLS, AGENTS, SOUL) + custom skills (`deploy-pipeline`, `project-ops`, `market-agents`, `railway-ops`, `roadmap-planner`) auto-copied to workspace on first boot
+- **workspace-templates/**: Agent personality templates (IDENTITY, USER, MEMORY, TOOLS, AGENTS, SOUL) + custom skills (`deploy-pipeline`, `project-ops`, `market-agents`, `railway-ops`) auto-copied to workspace on first boot
 - **Dockerfile**: Single-stage build (installs OpenClaw, gh, jq, wrangler, railway CLI)
 
 ### Environment Variables
@@ -97,17 +96,17 @@ open http://localhost:8080/setup  # password: test
 
 The wrapper manages a **two-layer auth scheme**:
 
-1. **Setup wizard auth**: Basic auth with `SETUP_PASSWORD` (src/server.js:190)
+1. **Setup wizard auth**: Basic auth with `SETUP_PASSWORD` (src/server.js:1536)
 2. **Gateway auth**: Bearer token (auto-generated or from `OPENCLAW_GATEWAY_TOKEN` env)
-   - Token is auto-injected into proxied requests (src/server.js:1122, src/server.js:1126)
-   - Persisted to `${STATE_DIR}/gateway.token` if not provided via env (src/server.js:25-48)
-3. **Control UI auth**: Token is injected into `localStorage["openclaw.control.settings.v1"]` via a bootstrap page (src/server.js:1158-1183)
+   - Token is auto-injected into proxied requests (src/server.js:5286, src/server.js:5290)
+   - Persisted to `${STATE_DIR}/gateway.token` if not provided via env (src/server.js:34-58)
+3. **Control UI auth**: Token is injected into `localStorage["openclaw.control.settings.v1"]` via a bootstrap page (src/server.js:5322-5347)
    - The Control UI reads its auth token from localStorage, NOT from URL params
    - A bootstrap page at `/openclaw` writes the token to localStorage and then redirects to `/openclaw?_boot=1` which is proxied to the gateway
 
 ### Onboarding Process
 
-When the user runs setup (src/server.js:522-693):
+When the user runs setup (src/server.js:1884-2042):
 
 1. Calls `openclaw onboard --non-interactive` with user-selected auth provider
 2. Writes channel configs (Telegram/Discord/Slack) directly to `openclaw.json` via `openclaw config set --json`
@@ -121,8 +120,8 @@ When the user runs setup (src/server.js:522-693):
 
 The wrapper **always** injects the bearer token into proxied requests so browser clients don't need to know it:
 
-- HTTP requests: via `proxy.on("proxyReq")` event handler (src/server.js:736)
-- WebSocket upgrades: via `proxy.on("proxyReqWs")` event handler (src/server.js:741)
+- HTTP requests: via `proxy.on("proxyReq")` event handler (src/server.js:5286)
+- WebSocket upgrades: via `proxy.on("proxyReqWs")` event handler (src/server.js:5290)
 
 **Important**: Token injection uses `http-proxy` event handlers (`proxyReq` and `proxyReqWs`) rather than direct `req.headers` modification. Direct header modification does not reliably work with WebSocket upgrades, causing intermittent `token_missing` or `token_mismatch` errors.
 
@@ -139,14 +138,14 @@ This allows the Control UI at `/openclaw` to work without user authentication.
 ### Testing authentication
 
 - Setup wizard: Clear browser auth, verify Basic auth challenge
-- Gateway: Remove `Authorization` header injection (src/server.js:736) and verify requests fail
+- Gateway: Remove `Authorization` header injection (src/server.js:5286) and verify requests fail
 
 ### Debugging gateway startup
 
 Check logs for:
-- `[gateway] starting with command: ...` (src/server.js:142)
-- `[gateway] ready at <endpoint>` (src/server.js:100)
-- `[gateway] failed to become ready after 20000ms` (src/server.js:109)
+- `[gateway] starting with command: ...` (src/server.js:1433)
+- `[gateway] ready at <endpoint>` (src/server.js:1330)
+- `[gateway] failed to become ready after 20000ms` (src/server.js:1346)
 
 If gateway doesn't start:
 - Verify `openclaw.json` exists and is valid JSON
@@ -155,7 +154,7 @@ If gateway doesn't start:
 
 ### Modifying onboarding args
 
-Edit `buildOnboardArgs()` (src/server.js:442-496) to add new CLI flags or auth providers.
+Edit `buildOnboardArgs()` (src/server.js:1757-1809) to add new CLI flags or auth providers.
 
 ### Adding new channel types
 
@@ -487,12 +486,12 @@ echo -e "\n=== Credentials ===" && curl -s -X POST -H "Authorization: Basic $AUT
 
 1. **Gateway token must be stable across redeploys** → persisted to volume if not in env
 2. **Channels are written via `config set --json`, not `channels add`** → avoids CLI version incompatibilities
-3. **Gateway readiness check polls multiple endpoints** (`/openclaw`, `/`, `/health`) → some builds only expose certain routes (src/server.js:92)
-4. **Discord bots require MESSAGE CONTENT INTENT** → document this in setup wizard (src/server.js:295-298)
-5. **Gateway spawn inherits stdio** → logs appear in wrapper output (src/server.js:134)
-6. **WebSocket auth requires proxy event handlers** → Direct `req.headers` modification doesn't work for WebSocket upgrades with http-proxy; must use `proxyReqWs` event (src/server.js:741) to reliably inject Authorization header
+3. **Gateway readiness check polls multiple endpoints** (`/openclaw`, `/`, `/health`) → some builds only expose certain routes (src/server.js:1316)
+4. **Discord bots require MESSAGE CONTENT INTENT** → document this in setup wizard
+5. **Gateway spawn inherits stdio** → logs appear in wrapper output (src/server.js:1406-1407)
+6. **WebSocket auth requires proxy event handlers** → Direct `req.headers` modification doesn't work for WebSocket upgrades with http-proxy; must use `proxyReqWs` event (src/server.js:5290) to reliably inject Authorization header
 7. **Control UI requires allowInsecureAuth to bypass pairing** → Set `gateway.controlUi.allowInsecureAuth=true` during onboarding to prevent "disconnected (1008): pairing required" errors (GitHub issue #2284). Wrapper already handles bearer token auth, so device pairing is unnecessary.
-8. **Control UI reads token from localStorage, not URL params** → The `?token=` URL parameter is NOT used by the Control UI JS for WebSocket auth. The wrapper serves a bootstrap page at `/openclaw` that writes the token to `localStorage["openclaw.control.settings.v1"]` before loading the actual UI (src/server.js:1158-1183).
+8. **Control UI reads token from localStorage, not URL params** → The `?token=` URL parameter is NOT used by the Control UI JS for WebSocket auth. The wrapper serves a bootstrap page at `/openclaw` that writes the token to `localStorage["openclaw.control.settings.v1"]` before loading the actual UI (src/server.js:5322-5347).
 9. **OpenClaw CLI `models` subcommand** → Use `openclaw models` (no args) for current model info. `models get` does NOT exist. `models list` and `models set <model>` work as expected.
 10. **Claude Code cannot browse the UI** → No Puppeteer/browser. Use `curl` against API endpoints for all management. `WebFetch` can fetch static HTML but cannot execute JS (so SPAs like `/dashboard` and `/openclaw` won't render).
 11. **Railway env vars trigger redeploy** → Use the batch endpoint `POST /setup/api/railway/env` with `skipDeploys: true` (default) to set multiple vars without triggering N separate redeploys. Manually redeploy when ready.
