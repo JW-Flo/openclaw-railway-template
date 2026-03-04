@@ -4780,6 +4780,7 @@ const DEFAULT_TICKER_CONFIG = {
     fourChan: { enabled: true, boards: ["biz", "pol", "g"] },
     reddit: { enabled: true, subreddits: ["wallstreetbets", "technology", "worldnews"] },
     hackerNews: { enabled: true },
+    blogwatcher: { enabled: true },
     manual: { enabled: true, items: [] },
   },
 };
@@ -5034,6 +5035,35 @@ async function fetchHackerNews(signal) {
   return items;
 }
 
+async function fetchBlogwatcher() {
+  const cached = getCached("blogwatcher");
+  if (cached) return cached;
+  const items = [];
+  // blogwatcher CLI stores articles in its local DB — scan then list recent
+  try {
+    await runCmd("blogwatcher", ["scan"]);
+  } catch { /* scan may fail if no blogs configured */ }
+  const result = await runCmd("blogwatcher", ["articles", "--unread"]);
+  const lines = (result.output || "").split("\n").filter(l => l.trim());
+  // Parse tabular output: ID | Source | Title | Published
+  for (const line of lines.slice(0, 10)) {
+    // Skip header lines
+    if (line.includes("---") || line.toLowerCase().startsWith("id")) continue;
+    const parts = line.split("|").map(p => p.trim());
+    if (parts.length < 3) continue;
+    const source = parts[1] || "blog";
+    const title = (parts[2] || "").slice(0, 120);
+    if (!title) continue;
+    items.push({
+      type: "headline", source: "blogwatcher",
+      text: `[${source}] ${title}`,
+      ts: parts[3] || new Date().toISOString(),
+    });
+  }
+  setCache("blogwatcher", items);
+  return items;
+}
+
 // ── Aggregator ──────────────────────────────────────────────────────────
 
 async function fetchMarketTickerItems(config) {
@@ -5050,6 +5080,7 @@ async function fetchMarketTickerItems(config) {
   if (src.fourChan?.enabled !== false) fetchers.push(fetchFourChan(ctrl.signal, src.fourChan?.boards));
   if (src.reddit?.enabled !== false) fetchers.push(fetchReddit(ctrl.signal, src.reddit?.subreddits));
   if (src.hackerNews?.enabled !== false) fetchers.push(fetchHackerNews(ctrl.signal));
+  if (src.blogwatcher?.enabled !== false) fetchers.push(fetchBlogwatcher());
 
   const results = await Promise.allSettled(fetchers);
   clearTimeout(timeout);
