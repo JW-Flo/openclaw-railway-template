@@ -11,6 +11,9 @@ npm-debug.log*
 dashboard/build
 dashboard/.svelte-kit
 
+# Lock files (project uses pnpm)
+package-lock.json
+
 # Backup exports
 *.tar.gz
 
