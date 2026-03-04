@@ -4865,10 +4865,10 @@ async function fetchMarketTickerItems() {
     for (const ev of events.slice(0, 6)) {
       const title = (ev.title || "").slice(0, 120);
       if (!title) continue;
-      // Pick the first nested market for price info
+      // Pick the first nested market for price info (Kalshi prices are in cents)
       const mkt = (ev.markets || [])[0];
       const yes = mkt ? mkt.yes_ask || mkt.last_price : null;
-      const pricePct = yes != null ? `${(Number(yes) * 100).toFixed(0)}%` : "";
+      const pricePct = yes != null ? `${Number(yes)}%` : "";
       items.push({
         type: "trade",
         text: `${title}${pricePct ? ` — YES ${pricePct}` : ""}`,
