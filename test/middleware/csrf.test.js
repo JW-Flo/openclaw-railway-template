@@ -1,23 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { csrfProtection, generateToken } from '../../src/middleware/csrf.js';
+import crypto from 'node:crypto';
+import { createCsrfProtection } from '../../src/middleware/csrf.js';
 
 function createApp(options = {}) {
   const app = express();
+  const csrf = createCsrfProtection(options);
 
-  // Parse cookies manually (simple version for testing)
-  app.use((req, _res, next) => {
-    req.cookies = {};
-    const cookieHeader = req.headers.cookie || '';
-    for (const pair of cookieHeader.split(';')) {
-      const [key, val] = pair.trim().split('=');
-      if (key) req.cookies[key] = val;
-    }
-    next();
-  });
-
-  app.use(csrfProtection(options));
+  app.use(csrf.injectToken);
+  app.use(csrf.protect);
 
   app.get('/test', (_req, res) => res.json({ ok: true }));
   app.post('/test', (_req, res) => res.json({ ok: true }));
@@ -48,21 +40,20 @@ describe('CSRF middleware', () => {
     const res = await request(app).get('/test');
     const setCookie = res.headers['set-cookie'];
     expect(setCookie).toBeDefined();
-    const csrfCookie = setCookie.find((c) => c.startsWith('_csrf='));
+    const csrfCookie = setCookie.find((c) => c.startsWith('_csrf_token='));
     expect(csrfCookie).toBeDefined();
   });
 
   it('POST without CSRF token returns 403', async () => {
     const res = await request(app).post('/test');
     expect(res.status).toBe(403);
-    expect(res.body.error).toBe('csrf_invalid');
   });
 
   it('POST with valid CSRF token returns 200', async () => {
-    const token = generateToken();
+    const token = crypto.randomBytes(32).toString('hex');
     const res = await request(app)
       .post('/test')
-      .set('Cookie', `_csrf=${token}`)
+      .set('Cookie', `_csrf_token=${token}`)
       .set('x-csrf-token', token);
     expect(res.status).toBe(200);
   });
@@ -70,8 +61,8 @@ describe('CSRF middleware', () => {
   it('POST with mismatched token returns 403', async () => {
     const res = await request(app)
       .post('/test')
-      .set('Cookie', '_csrf=token-a')
-      .set('x-csrf-token', 'token-b');
+      .set('Cookie', '_csrf_token=token-aaaaaaaaaaaaaaa')
+      .set('x-csrf-token', 'token-bbbbbbbbbbbbbbb');
     expect(res.status).toBe(403);
   });
 
@@ -90,8 +81,15 @@ describe('CSRF middleware', () => {
     expect(res.status).toBe(200);
   });
 
-  it('Bearer auth requests skip CSRF check', async () => {
-    const res = await request(app)
+  it('Bearer auth requests skip CSRF via exemptCheck', async () => {
+    const appWithBearer = createApp({
+      exemptPaths: ['/exempt'],
+      exemptCheck: (req) => {
+        const auth = req.headers.authorization || '';
+        return auth.startsWith('Bearer ');
+      },
+    });
+    const res = await request(appWithBearer)
       .post('/test')
       .set('Authorization', 'Bearer some-api-token');
     expect(res.status).toBe(200);

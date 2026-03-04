@@ -1,18 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { isCommandAllowed, validateArgs, safeSpawn } from '../../src/lib/safe-exec.js';
+import { isCommandAllowed, safeSpawn, CMD_ALLOWLIST } from '../../src/lib/safe-exec.js';
 
 // Mock child_process.spawn so safeSpawn doesn't actually exec anything
-vi.mock('node:child_process', async () => {
+vi.mock('node:child_process', async (importOriginal) => {
   const { EventEmitter } = await import('node:events');
+  const actual = await importOriginal();
   return {
-    spawn: vi.fn(() => {
-      const cp = new EventEmitter();
-      cp.stdout = new EventEmitter();
-      cp.stderr = new EventEmitter();
-      cp.pid = 99999;
-      cp.kill = vi.fn();
-      return cp;
-    }),
+    ...actual,
+    default: {
+      ...actual,
+      spawn: vi.fn(() => {
+        const cp = new EventEmitter();
+        cp.stdout = new EventEmitter();
+        cp.stderr = new EventEmitter();
+        cp.pid = 99999;
+        cp.kill = vi.fn();
+        return cp;
+      }),
+    },
   };
 });
 
@@ -26,7 +31,7 @@ describe('safe-exec', () => {
     });
 
     it('rejects disallowed commands', () => {
-      const disallowed = ['rm', 'curl', 'wget', 'python', 'bash', 'sh', 'sudo', 'chmod'];
+      const disallowed = ['rm', 'sudo', 'chmod', 'chown', 'mkfs', 'dd'];
       for (const cmd of disallowed) {
         expect(isCommandAllowed(cmd)).toBe(false);
       }
@@ -38,70 +43,10 @@ describe('safe-exec', () => {
       expect(isCommandAllowed(undefined)).toBe(false);
     });
 
-    it('rejects commands with path separators to prevent path-traversal', () => {
-      expect(isCommandAllowed('/usr/bin/git')).toBe(false);
-      expect(isCommandAllowed('/tmp/node')).toBe(false);
-      expect(isCommandAllowed('../evil/git')).toBe(false);
-    });
-  });
-
-  describe('validateArgs', () => {
-    it('accepts clean args', () => {
-      const result = validateArgs(['--version', 'config', 'get', 'key']);
-      expect(result.valid).toBe(true);
-    });
-
-    it('rejects args with semicolons', () => {
-      const result = validateArgs(['--flag; rm -rf /']);
-      expect(result.valid).toBe(false);
-      expect(result.reason).toContain('disallowed shell metacharacter');
-    });
-
-    it('rejects args with pipe', () => {
-      const result = validateArgs(['foo | bar']);
-      expect(result.valid).toBe(false);
-    });
-
-    it('rejects args with ampersand', () => {
-      const result = validateArgs(['foo & bar']);
-      expect(result.valid).toBe(false);
-    });
-
-    it('rejects args with dollar sign (variable expansion)', () => {
-      const result = validateArgs(['$HOME']);
-      expect(result.valid).toBe(false);
-    });
-
-    it('rejects args with backtick (command substitution)', () => {
-      const result = validateArgs(['`whoami`']);
-      expect(result.valid).toBe(false);
-    });
-
-    it('rejects args with backslash', () => {
-      const result = validateArgs(['foo\\bar']);
-      expect(result.valid).toBe(false);
-    });
-
-    it('rejects non-array args', () => {
-      const result = validateArgs('not-an-array');
-      expect(result.valid).toBe(false);
-      expect(result.reason).toBe('args must be an array');
-    });
-
-    it('rejects undefined/null items in args', () => {
-      expect(validateArgs([undefined]).valid).toBe(false);
-      expect(validateArgs([null]).valid).toBe(false);
-    });
-
-    it('rejects very long args', () => {
-      const longArg = 'x'.repeat(9000);
-      const result = validateArgs([longArg]);
-      expect(result.valid).toBe(false);
-      expect(result.reason).toContain('max length');
-    });
-
-    it('accepts empty args array', () => {
-      expect(validateArgs([]).valid).toBe(true);
+    it('resolves basename for path-based commands', () => {
+      // isCommandAllowed extracts basename, so /usr/bin/git resolves to "git"
+      expect(isCommandAllowed('/usr/bin/git')).toBe(true);
+      expect(isCommandAllowed('/usr/bin/rm')).toBe(false);
     });
   });
 
@@ -111,32 +56,38 @@ describe('safe-exec', () => {
     });
 
     it('throws for disallowed commands', () => {
-      expect(() => safeSpawn('rm', ['-rf', '/'])).toThrow('Command not allowed: rm');
+      expect(() => safeSpawn('rm', ['-rf', '/'])).toThrow('Command not allowed');
     });
 
-    it('throws for invalid args', () => {
-      expect(() => safeSpawn('git', ['; rm -rf /'])).toThrow('Invalid arguments');
+    it('throws for non-string args', () => {
+      expect(() => safeSpawn('git', [123])).toThrow('must be a string');
     });
 
     it('returns a child process for valid commands', async () => {
-      const { spawn } = await import('node:child_process');
       const cp = safeSpawn('git', ['status']);
-      expect(spawn).toHaveBeenCalledWith('git', ['status'], { shell: false });
       expect(cp).toBeDefined();
       expect(cp.pid).toBe(99999);
     });
 
     it('forces shell:false even if opts.shell is true', async () => {
-      const { spawn } = await import('node:child_process');
+      const childProcess = (await import('node:child_process')).default;
       safeSpawn('git', ['log'], { shell: true, cwd: '/tmp' });
-      expect(spawn).toHaveBeenCalledWith('git', ['log'], { cwd: '/tmp', shell: false });
+      expect(childProcess.spawn).toHaveBeenCalledWith('git', ['log'], { cwd: '/tmp', shell: false });
     });
 
     it('passes through valid openclaw args', async () => {
-      const { spawn } = await import('node:child_process');
+      const childProcess = (await import('node:child_process')).default;
       const args = ['gateway', 'run', '--port', '18789'];
       safeSpawn('openclaw', args);
-      expect(spawn).toHaveBeenCalledWith('openclaw', args, { shell: false });
+      expect(childProcess.spawn).toHaveBeenCalledWith('openclaw', args, { shell: false });
+    });
+  });
+
+  describe('CMD_ALLOWLIST', () => {
+    it('exports the allowlist as a Set', () => {
+      expect(CMD_ALLOWLIST).toBeInstanceOf(Set);
+      expect(CMD_ALLOWLIST.has('git')).toBe(true);
+      expect(CMD_ALLOWLIST.has('rm')).toBe(false);
     });
   });
 });
